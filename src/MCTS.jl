@@ -10,10 +10,8 @@ using ThreadTools
 using Plots
 using StatsBase: mean
 
-export test
-
-# TODO: does the nested view work when we're storing along rows?
-# We really should be storing along columns anyway
+export test, ab_game_lengths, simulate, start_state, rand_policy,
+  AlphaBeta
 
 include("util.jl")
 
@@ -71,18 +69,26 @@ end
 const PieceIx = UInt8
 const Action = Tuple{PieceIx, Pos}
 
+struct ValuedAction
+  action::Union{Action, Nothing}
+  value::Float32
+end
+
+# Hueristic value is dy
 function piece_actions(st::State)
-  actions = Vector{Action}()
+  actions = Vector{ValuedAction}()
   ball_pos = st.positions[st.player].ball
+  mlt = st.player == 1 ? 0.2 : -0.2
   for i in 1:5
     x = st.positions[st.player].pieces[:, i]
     if any(x .!= ball_pos)
       for move in (SVector{2}([1,2]), SVector{2}([2,1]))
         for d1 in (-1, 1)
           for d2 in (-1, 1)
-            pos = x .+ move .* (@SVector [d1, d2])
+            dx = move .* (@SVector [d1, d2])
+            pos = x .+ dx
             if all(pos .>= 1) && all(pos .<= limits) && !occupied(st, pos)
-              push!(actions, (i, pos))
+              push!(actions, ValuedAction((i, pos), mlt * dx[2]))
             end
           end
         end
@@ -94,6 +100,7 @@ end
 
 function ball_actions(st::State)
   y = st.positions[st.player].ball
+  mlt = st.player == 1 ? 0.8 : -0.8
   passes = Set{Pos}([y])
   balls = [y]
   while length(balls) > 0
@@ -107,7 +114,7 @@ function ball_actions(st::State)
     end
   end
   pop!(passes, y)
-  [(UInt8(6), p) for p in passes]
+  [ValuedAction((UInt8(6), p), mlt * (p - y)[2]) for p in passes]
 end
 
 next_player(player::Int) = (1 ⊻ (player - 1)) + 1
@@ -151,11 +158,15 @@ end
 
 function actions(st)
   pa = piece_actions(st)
-  Random.shuffle!(pa)
-  ba = ball_actions(st)
-  Random.shuffle!(ba)
-  append!(ba, pa)
-  ba
+  append!(pa, ball_actions(st))
+  pa
+end
+
+function ordered_actions(st)
+  acts = actions(st)
+  Random.shuffle!(acts)
+  sort!(acts; by=a-> a.value, rev=true) 
+  acts
 end
 
 function rand_policy(st::State)
@@ -163,7 +174,8 @@ function rand_policy(st::State)
   choices[rand(1:length(choices))]
 end
 
-function apply_action(st::State, a::Action)
+function apply_action(st::State, va::ValuedAction)
+  a = va.action
   if a[1] < 6
     pieces = st.positions[st.player].pieces
     pmat = Matrix(pieces) 
@@ -185,6 +197,7 @@ function log_action(st, action)
 end
 
 function simulate(st::State, players; steps=600)
+  println("Simulating on thread $(Threads.threadid())")
   for nsteps in 1:steps
     action = players[st.player](st)
     # log_action(st, action)
@@ -194,7 +207,6 @@ function simulate(st::State, players; steps=600)
     end
     st = @set st.player = next_player(st.player) 
   end
-  println(".")
   return (nothing, steps)
 end
 
@@ -212,7 +224,7 @@ function cached_max_action(st, depth, cache)
     cached[nst] = chosen
     ValuedAction(group_ops(chosen[1], action_map), 0)
   else
-    mapreduce(larger_q, actions(nst)) do a
+    mapreduce(larger_q, ordered_actions(nst)) do a
       next_st = @set apply_action(nst, a).player = 2
       cached_max_action(next_St, depth - 1, cache)
     end
@@ -228,11 +240,6 @@ function (mm::CachedMinimax)(st::State)
   cached_max_action(st, mm.depth, cache)
 end
 
-struct ValuedAction
-  action::Union{Action, Nothing}
-  value::Float32
-end
-
 const no_min_action = ValuedAction(nothing, 1f0)
 const no_max_action = ValuedAction(nothing, -1f0)
 
@@ -240,13 +247,13 @@ function min_action(st, alpha, beta, depth)
   if is_terminal(st)
     ValuedAction(nothing, 1)
   elseif depth == 0
-    ValuedAction(rand_policy(st), 0)
+    rand_policy(st)
   else
-    for a in actions(st) 
+    for a in ordered_actions(st) 
       next_st = @set apply_action(st, a).player = next_player(st.player)
       lb = max_action(next_st, alpha, beta, depth - 1)
       if lb.value <= beta.value
-        beta = ValuedAction(a, lb.value)
+        beta = ValuedAction(a.action, lb.value)
         if alpha.value > beta.value
           return alpha
         end
@@ -263,13 +270,13 @@ function max_action(st, alpha, beta, depth)
   if is_terminal(st)
     ValuedAction(nothing, -1)
   elseif depth == 0
-    ValuedAction(rand_policy(st), 0)
+    rand_policy(st)
   else
-    for a in actions(st)
+    for a in ordered_actions(st)
       next_st = @set apply_action(st, a).player = next_player(st.player)
       ub = min_action(next_st, alpha, beta, depth - 1)
       if ub.value >= alpha.value
-        alpha = ValuedAction(a, ub.value)
+        alpha = ValuedAction(a.action, ub.value)
         if alpha.value > beta.value
           return beta
         end
@@ -288,9 +295,9 @@ end
 
 function (ab::AlphaBeta)(st)
   if st.player == 1
-    max_action(st, no_max_action, no_min_action, ab.depth).action
+    max_action(st, no_max_action, no_min_action, ab.depth)
   else
-    min_action(st, no_max_action, no_min_action, ab.depth).action
+    min_action(st, no_max_action, no_min_action, ab.depth)
   end
 end
 
@@ -383,13 +390,13 @@ function (mcts::MC)(st::State)
 end
 
 function rand_game_lengths()
-  results = [simulate(start_state, [rand_policy, rand_policy]) for _ in 1:10]
+  results = tmap(_->simulate(start_state, [rand_policy, rand_policy]), 8, 1:10)
   println("$(sum(isnothing(r[1]) for r in results) / 10) were nothing")
   histogram([r[2] for r in results if !isnothing(r[1])])
 end
 
 function ab_game_lengths()
-  results = tmap(_->simulate(start_state, [AlphaBeta(3), rand_policy]), 1:10)
+  results = tmap(_->simulate(start_state, [AlphaBeta(3), rand_policy]), 8, 1:10)
   println("$(sum(isnothing(r[1]) for r in results) / 10) were nothing")
   win_avg = mean([r[1] for r in results if !isnothing(r[1])])
   println("Average winner was $win_avg") 
