@@ -23,7 +23,7 @@ const Pos = SVector{2, Int8}
 
 struct PlayerState
   ball::Pos
-  pieces::SMatrix{5,2, Int8}
+  pieces::SMatrix{2,5, Int8}
 end
 @functor PlayerState
 
@@ -37,10 +37,10 @@ const start_state = State(1,
   SVector{2}([
     PlayerState(
       SVector{2}([4,1]),
-      SMatrix{5,2}(Int8[collect(2:6) fill(1, 5)])),
+      SMatrix{2,5}(Int8[collect(2:6) fill(1, 5)]')),
     PlayerState(
       SVector{2}([4,7]),
-      SMatrix{5,2}(Int8[collect(2:6) fill(7, 5)]))
+      SMatrix{2,5}(Int8[collect(2:6) fill(7, 5)]'))
       ]))
  
 function is_terminal(state)
@@ -48,7 +48,7 @@ function is_terminal(state)
 end
 
 function occupied(state, y)
-  inner(p::SMatrix) = any(all(p .== y[na,:]; dims=2))
+  inner(p::SMatrix) = any(all(p .== y[:, na]; dims=1))
   inner(_) = false
   foldmap(inner, Base.:|, false, state)
 end
@@ -75,7 +75,7 @@ function piece_actions(st::State)
   actions = Vector{Action}()
   ball_pos = st.positions[st.player].ball
   for i in 1:5
-    x = st.positions[st.player].pieces[i, :]
+    x = st.positions[st.player].pieces[:, i]
     if any(x .!= ball_pos)
       for move in (SVector{2}([1,2]), SVector{2}([2,1]))
         for d1 in (-1, 1)
@@ -117,29 +117,29 @@ const Dir = Pos
 function pass_actions(st::State, x::Pos)
   moves = Dict{Dir, PotentialMove}()
   for player in (st.player, next_player(st.player))
-    vecs = st.positions[player].pieces .- x[na, :]
+    vecs = st.positions[player].pieces .- x[:, na]
     absvecs = abs.(vecs)
-    diagonals = absvecs[:, 1] .== absvecs[:, 2]
-    verticals = vecs[:, 1] .== 0
-    horizontals = vecs[:, 2] .== 0
-    norms = maximum(absvecs; dims=2)[:, 1]
+    diagonals = absvecs[1, :] .== absvecs[2, :]
+    verticals = vecs[1, :] .== 0
+    horizontals = vecs[1, :] .== 0
+    norms = maximum(absvecs; dims=1)[1, :]
     nz = norms .> 0
     valid = (diagonals .| verticals .| horizontals) .& nz
     norms = norms[valid]
-    units = vecs[valid, :] .÷ norms[:, na]
-    y = st.positions[player].pieces[valid, :]
+    units = vecs[:, valid] .÷ norms[na, :]
+    y = st.positions[player].pieces[:, valid]
     if player == st.player
-      for i in 1:size(units, 1)
-        u = SVector{2}(units[i, :])
+      for i in 1:size(units, 2)
+        u = SVector{2}(units[:, i])
         if haskey(moves, u)
-          moves[u] = lub(moves[u], PotentialMove(y[i,:], norms[i]))
+          moves[u] = lub(moves[u], PotentialMove(y[:,i], norms[i]))
         else
-          moves[u] = PotentialMove(y[i,:], norms[i])
+          moves[u] = PotentialMove(y[:,i], norms[i])
         end
       end
     else
-      for i in 1:size(units, 1)
-        u = SVector{2}(units[i, :])
+      for i in 1:size(units, 2)
+        u = SVector{2}(units[:, i])
         if haskey(moves, u) && norms[i] < moves[u].norm
           pop!(moves, u)
         end
@@ -167,8 +167,8 @@ function apply_action(st::State, a::Action)
   if a[1] < 6
     pieces = st.positions[st.player].pieces
     pmat = Matrix(pieces) 
-    pmat[a[1], :] .= a[2]
-    @set st.positions[st.player].pieces = SMatrix{5,2}(pmat)
+    pmat[:, a[1]] .= a[2]
+    @set st.positions[st.player].pieces = SMatrix{2,5}(pmat)
   else
     @set st.positions[st.player].ball = a[2]
   end
@@ -176,7 +176,7 @@ end
 
 function log_action(st, action)
   if action[1] < 6
-    old_pos = st.positions[st.player].pieces[action[1], :]
+    old_pos = st.positions[st.player].pieces[:, action[1]]
     println("$(st.player) moves from $old_pos to $(action[2])")
   else
     old_pos = st.positions[st.player].ball
@@ -225,7 +225,7 @@ end
 
 function (mm::CachedMinimax)(st::State)
   cache = Dict{State, ValuedAction}()
-  cached_max_action(st, mm.depth)
+  cached_max_action(st, mm.depth, cache)
 end
 
 struct ValuedAction
@@ -307,7 +307,7 @@ const mean_pos = SVector{2, Int8}([4, 0])
 const flip = SVector{2, Int8}([-1, 1])
 
 flip_vec(a::Pos) = flip .* (a .- mean_pos) .+ mean_pos
-flip_vec(a::SMatrix) = flip[na,:] .* (a .- mean_pos[na,:]) .+ mean_pos[na,:]
+flip_vec(a::SMatrix) = flip[:, na] .* (a .- mean_pos[:, na]) .+ mean_pos[:, na]
 
 function group_op(a::Action, ::Flip)
   @set a[2] = flip_vec(a[2])
@@ -341,7 +341,7 @@ function normalized(st)
   # Sort tokens of each player
   ixs = fmapstructure(a->sortperm(nestedview(a)), st; exclude=ismat)
   st = fmap(st, ixs) do a, ix
-    a[ix, :]
+    a[:, ix]
   end
   push!(action_map, TokenPerm(invperm(ixs.positions[1].pieces)))
   
