@@ -15,7 +15,7 @@ export test, ab_game_lengths, simulate, start_state, rand_policy,
 
 include("util.jl")
 
-indent_level = Ref(0)
+const indent_level = Ref(0)
 
 indent!() = indent_level[] += 1
 
@@ -94,7 +94,7 @@ end
 function piece_actions(st::State)
   actions = Vector{Action}()
   ball_pos = st.positions[st.player].ball
-  for i in 1:1 # 1:5
+  for i in 1:5
     x = st.positions[st.player].pieces[:, i]
     if any(x .!= ball_pos)
       for move in (SVector{2}([1,2]), SVector{2}([2,1]))
@@ -283,7 +283,7 @@ function cached_max_action(st::State, depth::Int, cache::Dict)
     chosen = rand_policy(nst)
     trans(ValuedAction(chosen.action, 0))
   else
-    best_child = mapreduce(larger_q, ordered_actions(nst)) do a
+    best_child = mapreduce(larger_q, shuffled_actions(nst)) do a
       next_st = @set apply_action(nst, a).player = 2
       child_val = cached_max_action(next_st, depth - 1, cache).value
       ValuedAction(a.action, discount * child_val)
@@ -317,20 +317,14 @@ const no_max_action = ValuedAction(nothing, -1 - eps)
 
 Base.:*(a::Number, b::ValuedAction) = ValuedAction(b.action, a * b.value)
 
-
-# TODO: might be easier to JUST calculate values here,
-# figure out corresponding actions later. 
-
 function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth)
   if depth == 0
-    return ValuedAction(rand_policy(st).action, clamp(0, alpha.value, beta.value))
+    return ValuedAction(rand_policy(st).action, 0)
   end
   for a in shuffled_actions(st) 
-    printindent("MIN Considering ")
-    log_action(st, a)
     next_st = @set apply_action(st, a).player = next_player(st.player)
     if is_terminal(next_st)
-      return ValuedAction(a.action, clamp(-1, alpha.value, beta.value))
+      return ValuedAction(a.action, -1)
     else
       lb = discount * max_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1)
       if lb.value < beta.value
@@ -349,39 +343,26 @@ end
 
 function max_action(st, alpha, beta, depth)
   if depth == 0
-    return ValuedAction(rand_policy(st).action, clamp(0, alpha.value, beta.value))
+    return ValuedAction(rand_policy(st).action, 0)
   end
-  printindent("Evaluating MAX actions\n")
-  indent!()
   for a in shuffled_actions(st)
-    printindent("Considering ")
-    log_action(st, a)
     next_st = @set apply_action(st, a).player = next_player(st.player)
     if is_terminal(next_st)
-      dedent!()
-      return ValuedAction(a.action, clamp(1, alpha.value, beta.value))
+      return ValuedAction(a.action, 1)
     else
       ub = discount * min_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1)
-      the_action = ValuedAction(a.action, discount * ub.value)
-      printindent("Retrieved ")
-      log_action(st, the_action)
+      the_action = ValuedAction(a.action, ub.value)
       if ub.value > alpha.value
         alpha = the_action
         if alpha.value > beta.value
-          dedent!()
-          printindent("Done $(alpha.value) > $(beta.value)\n")
           return beta
         end
         if alpha.value == beta.value
-          dedent!()
-          printindent("Done (got max)\n")
           return alpha
         end
       end
     end
   end
-  dedent!()
-  printindent("Done\n")
   alpha
 end
 
@@ -400,7 +381,7 @@ end
 abstract type GroupElt end
 
 struct TokenPerm <: GroupElt
-  perm::SVector{5, Int8}
+  perm::SVector{5, UInt8}
 end
 
 struct FlipHor <: GroupElt end
@@ -456,22 +437,22 @@ function normalized(st)
   end
   
   # Flip the board left or right
-  # st2 = fmap(flip_vec, st)
-  # if hash(st2) > hash(st)
-  #   st = st2
-  #   push!(action_map, Flip())
-  # end
+  st2 = fmap(flip_pos_vert, st)
+  if hash(st2) > hash(st)
+    st = st2
+    push!(action_map, FlipVert())
+  end
   
   # Sort tokens of each player
-  # ixs = fmapstructure(a->sortperm(nestedview(a)), st; exclude=ismat)
-  # st = fmap(st, ixs) do a, ix
-  #   if ix === (())
-  #     a
-  #   else
-  #     a[:, ix]
-  #   end
-  # end
-  # push!(action_map, TokenPerm(invperm(ixs.positions[1].pieces)))
+  ixs = fmapstructure(a->sortperm(nestedview(a)), st; exclude=ismat)
+  st = fmap(st, ixs) do a, ix
+    if ix === (())
+      a
+    else
+      a[:, ix]
+    end
+  end
+  push!(action_map, TokenPerm(invperm(ixs.positions[1].pieces)))
   
   assert_valid_state(st)
   Transformation(action_map, value_map), st
@@ -541,11 +522,11 @@ end
 # Depth is roughly 45. So in 4 steps, that's 4 million positions
 
 # Hueristics:
-# Find whether a node is 'terminal' at action generation time
-# Position of the ball? Highest player position
+# Position of the ball? Highest player position?
 
 # Optimizations:
 # Encode and use bitvec instead of Dict for ball passing
+# Disable all the validation checks
 
 
 include("tests.jl")
