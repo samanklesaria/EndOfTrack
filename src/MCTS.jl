@@ -17,6 +17,9 @@ include("util.jl")
 
 const limits = @SVector [7, 8]
 
+const discount = 0.999f0
+const inv_discount = 1/discount
+
 const Pos = SVector{2, Int8}
 
 struct PlayerState
@@ -78,7 +81,7 @@ function piece_actions(st::State)
   actions = Vector{ValuedAction}()
   ball_pos = st.positions[st.player].ball
   mlt = 0 # st.player == 1 ? 0.2 : -0.2
-  for i in 1:5
+  for i in 1:1 # 1:5
     x = st.positions[st.player].pieces[:, i]
     if any(x .!= ball_pos)
       for move in (SVector{2}([1,2]), SVector{2}([2,1]))
@@ -205,7 +208,7 @@ function unchecked_apply_action(st::State, va::ValuedAction)
   a = va.action
   if a[1] < 6
     pieces = st.positions[st.player].pieces
-    pmat = Matrix(pieces) 
+    pmat = MMatrix{2,5}(pieces) 
     pmat[:, a[1]] .= a[2]
     @set st.positions[st.player].pieces = SMatrix{2,5}(pmat)
   else
@@ -261,7 +264,7 @@ function cached_max_action(st::State, depth::Int, cache::Dict)
     best_child = mapreduce(larger_q, ordered_actions(nst)) do a
       next_st = @set apply_action(nst, a).player = 2
       child_val = cached_max_action(next_st, depth - 1, cache).value
-      ValuedAction(a.action, child_val)
+      ValuedAction(a.action, discount * child_val)
     end
     cache[nst] = best_child
     trans(best_child)
@@ -286,8 +289,8 @@ function (mm::CachedMinimax)(st::State)
   cached_max_action(st, mm.depth, cache)
 end
 
-const no_min_action = ValuedAction(nothing, 1f0)
-const no_max_action = ValuedAction(nothing, -1f0)
+const no_min_action = ValuedAction(nothing, discount)
+const no_max_action = ValuedAction(nothing, -discount)
 
 function min_action(st, alpha, beta, depth)
   if is_terminal(st)
@@ -296,10 +299,12 @@ function min_action(st, alpha, beta, depth)
     rand_policy(st)
   else
     for a in ordered_actions(st) 
+      print("MIN Considering ")
+      log_action(st, a)
       next_st = @set apply_action(st, a).player = next_player(st.player)
-      lb = max_action(next_st, alpha, beta, depth - 1)
+      lb = max_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1)
       if lb.value <= beta.value
-        beta = ValuedAction(a.action, lb.value)
+        beta = ValuedAction(a.action, discount * lb.value)
         if alpha.value > beta.value
           return alpha
         end
@@ -318,19 +323,29 @@ function max_action(st, alpha, beta, depth)
   elseif depth == 0
     rand_policy(st)
   else
+    println("Evaluating MAX actions")
     for a in ordered_actions(st)
+      print("Considering ")
+      log_action(st, a)
+      
       next_st = @set apply_action(st, a).player = next_player(st.player)
-      ub = min_action(next_st, alpha, beta, depth - 1)
+      ub = min_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1)
+      the_action = ValuedAction(a.action, discount * ub.value)
+      print("Retrieved ")
+      log_action(st, the_action)
       if ub.value >= alpha.value
-        alpha = ValuedAction(a.action, ub.value)
+        alpha = the_action
         if alpha.value > beta.value
+          println("Done $(alpha.value) > $(beta.value)")
           return beta
         end
         if alpha.value == beta.value
+          println("Done (got max)")
           return alpha
         end
       end
     end
+    println("Done")
     alpha
   end
 end
@@ -489,6 +504,13 @@ end
 # Tag every node with which of the original actions used it.
 # After a round, sweep away nodes that were not used by the chosen action 
 # Depth is roughly 45. So in 4 steps, that's 4 million positions
+
+# Hueristics:
+# Find whether a node is 'terminal' at action generation time
+# Position of the ball? Highest player position
+
+# Optimizations:
+# Encode and use bitvec instead of Dict for ball passing
 
 
 include("tests.jl")
