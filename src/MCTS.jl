@@ -15,9 +15,23 @@ export test, ab_game_lengths, simulate, start_state, rand_policy,
 
 include("util.jl")
 
+indent_level = Ref(0)
+
+indent!() = indent_level[] += 1
+
+function dedent!()
+  @assert indent_level[] > 0
+  indent_level[] -= 1
+end
+
+function printindent(a)
+  print(String(fill(' ', 4 * indent_level[])))
+  print(a)
+end
+
 const limits = @SVector [7, 8]
 
-const discount = 0.999f0
+const discount = 0.99f0
 const inv_discount = 1/discount
 
 const Pos = SVector{2, Int8}
@@ -78,19 +92,17 @@ struct ValuedAction
 end
 
 function piece_actions(st::State)
-  actions = Vector{ValuedAction}()
+  actions = Vector{Action}()
   ball_pos = st.positions[st.player].ball
-  mlt = 0 # st.player == 1 ? 0.2 : -0.2
   for i in 1:1 # 1:5
     x = st.positions[st.player].pieces[:, i]
     if any(x .!= ball_pos)
       for move in (SVector{2}([1,2]), SVector{2}([2,1]))
         for d1 in (-1, 1)
           for d2 in (-1, 1)
-            dx = move .* (@SVector [d1, d2])
-            pos = x .+ dx
+            pos = x .+ move .* (@SVector [d1, d2])
             if all(pos .>= 1) && all(pos .<= limits) && !occupied(st, pos)
-              push!(actions, ValuedAction((i, pos), mlt * dx[2]))
+              push!(actions, (i, pos))
             end
           end
         end
@@ -102,7 +114,6 @@ end
 
 function ball_actions(st::State)
   y = st.positions[st.player].ball
-  mlt = 0 # st.player == 1 ? 0.8 : -0.8
   passes = Set{Pos}([y])
   balls = [y]
   while length(balls) > 0
@@ -116,7 +127,7 @@ function ball_actions(st::State)
     end
   end
   pop!(passes, y)
-  [ValuedAction((UInt8(6), p), mlt * (p - y)[2]) for p in passes]
+  [(UInt8(6), p) for p in passes]
 end
 
 next_player(player::Int) = (1 ⊻ (player - 1)) + 1
@@ -175,17 +186,29 @@ function pass_actions(st::State, x::Pos)
 end
 
 function actions(st)
-  pa = piece_actions(st)
-  append!(pa, ball_actions(st))
-  pa
+  [apply_hueristic(st, a) for a in Iterators.flatten(
+    (piece_actions(st), ball_actions(st)))]
 end
 
 function ordered_actions(st)
+  sort(actions(st); by=a-> abs(a.value), rev=true) 
+end
+
+function apply_hueristic(st, a)
+  term = is_terminal(unchecked_apply_action(st, a))
+  if !term
+    return ValuedAction(a, 0)
+  else
+    return ValuedAction(a, st.player == 1 ? 1 : -1)
+  end
+end
+
+function shuffled_actions(st)
   acts = actions(st)
   Random.shuffle!(acts)
-  # acts = sort(acts; by=a-> a.value, rev= st.player == 1, alg=MergeSort) 
-  return acts
+  sort(acts; by=a-> abs.(a.value), rev= true, alg=MergeSort) 
 end
+
 
 function rand_policy(st::State)
   choices = actions(st)
@@ -193,7 +216,7 @@ function rand_policy(st::State)
 end
 
 function apply_action(st::State, va::ValuedAction)
-  new_st = unchecked_apply_action(st, va)
+  new_st = unchecked_apply_action(st, va.action)
   try
     assert_valid_state(new_st)
   catch exc
@@ -204,8 +227,7 @@ function apply_action(st::State, va::ValuedAction)
   new_st
 end
 
-function unchecked_apply_action(st::State, va::ValuedAction)
-  a = va.action
+function unchecked_apply_action(st::State, a::Action)
   if a[1] < 6
     pieces = st.positions[st.player].pieces
     pmat = MMatrix{2,5}(pieces) 
@@ -289,22 +311,30 @@ function (mm::CachedMinimax)(st::State)
   cached_max_action(st, mm.depth, cache)
 end
 
-const no_min_action = ValuedAction(nothing, discount)
-const no_max_action = ValuedAction(nothing, -discount)
+const eps = 1e-3
+const no_min_action = ValuedAction(nothing, 1 + eps)
+const no_max_action = ValuedAction(nothing, -1 - eps)
 
-function min_action(st, alpha, beta, depth)
-  if is_terminal(st)
-    ValuedAction(nothing, 1)
-  elseif depth == 0
-    rand_policy(st)
-  else
-    for a in ordered_actions(st) 
-      print("MIN Considering ")
-      log_action(st, a)
-      next_st = @set apply_action(st, a).player = next_player(st.player)
-      lb = max_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1)
-      if lb.value <= beta.value
-        beta = ValuedAction(a.action, discount * lb.value)
+Base.:*(a::Number, b::ValuedAction) = ValuedAction(b.action, a * b.value)
+
+
+# TODO: might be easier to JUST calculate values here,
+# figure out corresponding actions later. 
+
+function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth)
+  if depth == 0
+    return ValuedAction(rand_policy(st).action, clamp(0, alpha.value, beta.value))
+  end
+  for a in shuffled_actions(st) 
+    printindent("MIN Considering ")
+    log_action(st, a)
+    next_st = @set apply_action(st, a).player = next_player(st.player)
+    if is_terminal(next_st)
+      return ValuedAction(a.action, clamp(-1, alpha.value, beta.value))
+    else
+      lb = discount * max_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1)
+      if lb.value < beta.value
+        beta = ValuedAction(a.action, lb.value)
         if alpha.value > beta.value
           return alpha
         end
@@ -313,41 +343,46 @@ function min_action(st, alpha, beta, depth)
         end
       end
     end
-    beta
   end
+  beta
 end
 
 function max_action(st, alpha, beta, depth)
-  if is_terminal(st)
-    ValuedAction(nothing, -1)
-  elseif depth == 0
-    rand_policy(st)
-  else
-    println("Evaluating MAX actions")
-    for a in ordered_actions(st)
-      print("Considering ")
-      log_action(st, a)
-      
-      next_st = @set apply_action(st, a).player = next_player(st.player)
-      ub = min_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1)
+  if depth == 0
+    return ValuedAction(rand_policy(st).action, clamp(0, alpha.value, beta.value))
+  end
+  printindent("Evaluating MAX actions\n")
+  indent!()
+  for a in shuffled_actions(st)
+    printindent("Considering ")
+    log_action(st, a)
+    next_st = @set apply_action(st, a).player = next_player(st.player)
+    if is_terminal(next_st)
+      dedent!()
+      return ValuedAction(a.action, clamp(1, alpha.value, beta.value))
+    else
+      ub = discount * min_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1)
       the_action = ValuedAction(a.action, discount * ub.value)
-      print("Retrieved ")
+      printindent("Retrieved ")
       log_action(st, the_action)
-      if ub.value >= alpha.value
+      if ub.value > alpha.value
         alpha = the_action
         if alpha.value > beta.value
-          println("Done $(alpha.value) > $(beta.value)")
+          dedent!()
+          printindent("Done $(alpha.value) > $(beta.value)\n")
           return beta
         end
         if alpha.value == beta.value
-          println("Done (got max)")
+          dedent!()
+          printindent("Done (got max)\n")
           return alpha
         end
       end
     end
-    println("Done")
-    alpha
   end
+  dedent!()
+  printindent("Done\n")
+  alpha
 end
 
 struct AlphaBeta
