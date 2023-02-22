@@ -11,7 +11,7 @@ using Plots
 using StatsBase: mean
 
 export test, ab_game_lengths, simulate, start_state, rand_policy,
-  AlphaBeta
+  AlphaBeta, precomp
 
 include("util.jl")
 
@@ -37,12 +37,12 @@ const start_state = State(1,
       SVector{2}([4,1]),
       SMatrix{2,5}(Int8[collect(2:6) fill(1, 5)]')),
     PlayerState(
-      SVector{2}([4,7]),
-      SMatrix{2,5}(Int8[collect(2:6) fill(7, 5)]'))
+      SVector{2}([4,8]),
+      SMatrix{2,5}(Int8[collect(2:6) fill(8, 5)]'))
       ]))
  
 function is_terminal(state)
-  state.positions[1].ball[2] == limits[2] || state.positions[2].ball[2] == 0
+  state.positions[1].ball[2] == limits[2] || state.positions[2].ball[2] == 1
 end
 
 function occupied(state, y)
@@ -74,11 +74,10 @@ struct ValuedAction
   value::Float32
 end
 
-# Hueristic value is dy
 function piece_actions(st::State)
   actions = Vector{ValuedAction}()
   ball_pos = st.positions[st.player].ball
-  mlt = st.player == 1 ? 0.2 : -0.2
+  mlt = 0 # st.player == 1 ? 0.2 : -0.2
   for i in 1:5
     x = st.positions[st.player].pieces[:, i]
     if any(x .!= ball_pos)
@@ -100,7 +99,7 @@ end
 
 function ball_actions(st::State)
   y = st.positions[st.player].ball
-  mlt = st.player == 1 ? 0.8 : -0.8
+  mlt = 0 # st.player == 1 ? 0.8 : -0.8
   passes = Set{Pos}([y])
   balls = [y]
   while length(balls) > 0
@@ -121,7 +120,23 @@ next_player(player::Int) = (1 ⊻ (player - 1)) + 1
 
 const Dir = Pos
 
+function encode(pieces)
+  (pieces[2,:] .- 1) .* limits[1] .+ pieces[1,:]
+end
+
+function assert_valid_state(st::State)
+  for i in (1,2)
+    encoded = encode(st.positions[i].pieces)
+    @assert length(encoded) == length(unique(encoded))
+    ball_pos = encode(st.positions[i].ball[:, na])
+    @assert ball_pos[1] in encoded
+    @assert all(st.positions[i].pieces .>= 1)
+    @assert all(st.positions[i].pieces .<= limits[:, na])
+  end
+end
+
 function pass_actions(st::State, x::Pos)
+  assert_valid_state(st)
   moves = Dict{Dir, PotentialMove}()
   for player in (st.player, next_player(st.player))
     vecs = st.positions[player].pieces .- x[:, na]
@@ -165,8 +180,8 @@ end
 function ordered_actions(st)
   acts = actions(st)
   Random.shuffle!(acts)
-  sort!(acts; by=a-> a.value, rev=true) 
-  acts
+  # acts = sort(acts; by=a-> a.value, rev= st.player == 1, alg=MergeSort) 
+  return acts
 end
 
 function rand_policy(st::State)
@@ -175,6 +190,18 @@ function rand_policy(st::State)
 end
 
 function apply_action(st::State, va::ValuedAction)
+  new_st = unchecked_apply_action(st, va)
+  try
+    assert_valid_state(new_st)
+  catch exc
+    println(st)
+    log_action(st, va)
+    rethrow() 
+  end
+  new_st
+end
+
+function unchecked_apply_action(st::State, va::ValuedAction)
   a = va.action
   if a[1] < 6
     pieces = st.positions[st.player].pieces
@@ -186,49 +213,68 @@ function apply_action(st::State, va::ValuedAction)
   end
 end
 
-function log_action(st, action)
+function log_action(st, action_val)
+  action = action_val.action 
+  val = action_val.value
   if action[1] < 6
     old_pos = st.positions[st.player].pieces[:, action[1]]
-    println("$(st.player) moves from $old_pos to $(action[2])")
+    println("[$val] $(st.player) moves from $old_pos to $(action[2])")
   else
     old_pos = st.positions[st.player].ball
-    println("$(st.player) kicks from $old_pos to $(action[2])")
+    println("[$val] $(st.player) kicks from $old_pos to $(action[2])")
   end
+end
+
+struct EndState
+  winner::Union{Int8, Nothing}
+  st::State
+  steps::Int
 end
 
 function simulate(st::State, players; steps=600)
   println("Simulating on thread $(Threads.threadid())")
   for nsteps in 1:steps
     action = players[st.player](st)
-    # log_action(st, action)
+    log_action(st, action)
     st = apply_action(st, action)
     if is_terminal(st)
-      return (st.player, nsteps)
+      return EndState(st.player, st, nsteps)
     end
     st = @set st.player = next_player(st.player) 
   end
-  return (nothing, steps)
+  return EndState(nothing, st, steps)
 end
 
 larger_q(a, b) = a.value > b.value ? a : b
 
-function cached_max_action(st, depth, cache)
-  action_map, value_map, nst = normalized(st)
-  if is_terminal(st)
-    ValuedAction(nothing, value_map * -1)
+function cached_max_action(st::State, depth::Int, cache::Dict)
+  trans, nst = normalized(st)
+  if is_terminal(nst)
+    trans(ValuedAction(nothing, -1))
   elseif haskey(cache, nst)
-    cached = cache[nst]
-    ValuedAction(group_ops(cached[1], action_map), value_map * cached[2])
+    println("Reusing cache")
+    trans(cache[nst])
   elseif depth == 0
-    chosen = ValuedAction(rand_policy(nst), 0)
-    cached[nst] = chosen
-    ValuedAction(group_ops(chosen[1], action_map), 0)
+    chosen = rand_policy(nst)
+    trans(ValuedAction(chosen.action, 0))
   else
-    mapreduce(larger_q, ordered_actions(nst)) do a
+    best_child = mapreduce(larger_q, ordered_actions(nst)) do a
       next_st = @set apply_action(nst, a).player = 2
-      cached_max_action(next_St, depth - 1, cache)
+      child_val = cached_max_action(next_st, depth - 1, cache).value
+      ValuedAction(a.action, child_val)
     end
+    cache[nst] = best_child
+    trans(best_child)
   end
+end
+
+function plot_state(st::State)
+  scatter(st.positions[1].pieces[1, :],
+    st.positions[1].pieces[2, :])
+  scatter!(st.positions[1].ball[1:1], st.positions[1].ball[2:2])
+  scatter!(st.positions[2].pieces[1,:],
+    st.positions[2].pieces[2, :])
+  scatter!(st.positions[2].ball[1:1], st.positions[2].ball[2:2])
 end
 
 struct CachedMinimax
@@ -304,58 +350,89 @@ end
 abstract type GroupElt end
 
 struct TokenPerm <: GroupElt
-  perm::SVector{6, Int8}
+  perm::SVector{5, Int8}
 end
 
-struct Flip <: GroupElt
+struct FlipHor <: GroupElt end
+
+struct FlipVert <: GroupElt end
+
+const mean_vert = SVector{2, Int8}([4, 0])
+const flip_vert = SVector{2, Int8}([-1, 1])
+
+const mean_hor = SVector{2}([0, 4.5])
+const flip_hor = SVector{2}([1, -1])
+
+flip_pos_vert(a::Pos) = flip_vert .* (a .- mean_vert) .+ mean_vert
+flip_pos_vert(a::SMatrix) = flip_vert[:, na] .* (a .- mean_vert[:, na]) .+ mean_vert[:, na]
+
+flip_pos_hor(a::Pos) = Pos(flip_hor .* (a .- mean_hor) .+ mean_hor)
+flip_pos_hor(a::SMatrix) = SMatrix{2,5, Int8}(flip_hor[:, na] .* (a .- mean_hor[:, na]) .+ mean_hor[:, na])
+
+function group_op(::FlipVert, a::Action)
+  @set a[2] = flip_pos_vert(a[2])
 end
 
-const mean_pos = SVector{2, Int8}([4, 0])
-const flip = SVector{2, Int8}([-1, 1])
-
-flip_vec(a::Pos) = flip .* (a .- mean_pos) .+ mean_pos
-flip_vec(a::SMatrix) = flip[:, na] .* (a .- mean_pos[:, na]) .+ mean_pos[:, na]
-
-function group_op(a::Action, ::Flip)
-  @set a[2] = flip_vec(a[2])
+function group_op(::FlipHor, a::Action)
+  @set a[2] = flip_pos_hor(a[2])
 end
 
-function group_op(a::Action, p::TokenPerm) 
-  @set a[1] = p.perm[a[1]]
+function group_op(p::TokenPerm, a::Action) 
+  if a[1] < 6
+    @set a[1] = p.perm[a[1]]
+  else
+    a
+  end
 end
 
 ismat(::SMatrix) = true
 ismat(_) = false
 
+struct Transformation
+  action_map::Vector{GroupElt}
+  value_map::Int
+end
+
 function normalized(st)
   action_map = GroupElt[]
   value_map = 1
   
-  # Swap players so that the current player is 0.
-  # Action map is unchanged, but value functions flip sign
+  # Swap players so that the current player is 1.
   if st.player == 2
+    st = fmap(flip_pos_hor, st)
     st = State(1, reverse(st.positions))
     value_map = -1
+    push!(action_map, FlipHor())
   end
   
   # Flip the board left or right
-  st2 = fmap(flip_vec, st)
-  if hash(st2) > hash(st)
-    st = st2
-    push!(action_map, Flip())
-  end
+  # st2 = fmap(flip_vec, st)
+  # if hash(st2) > hash(st)
+  #   st = st2
+  #   push!(action_map, Flip())
+  # end
   
   # Sort tokens of each player
-  ixs = fmapstructure(a->sortperm(nestedview(a)), st; exclude=ismat)
-  st = fmap(st, ixs) do a, ix
-    a[:, ix]
-  end
-  push!(action_map, TokenPerm(invperm(ixs.positions[1].pieces)))
+  # ixs = fmapstructure(a->sortperm(nestedview(a)), st; exclude=ismat)
+  # st = fmap(st, ixs) do a, ix
+  #   if ix === (())
+  #     a
+  #   else
+  #     a[:, ix]
+  #   end
+  # end
+  # push!(action_map, TokenPerm(invperm(ixs.positions[1].pieces)))
   
-  (action_map, value_map, st)
+  assert_valid_state(st)
+  Transformation(action_map, value_map), st
 end
 
-group_ops(a::Action, ops::Vector{GroupElt}) = foldl(group_op, ops; init=a)
+group_ops(_, a::Nothing) = a
+group_ops(ops::Vector{GroupElt}, a::Action) = foldr(group_op, ops; init=a)
+
+function (t::Transformation)(a::ValuedAction)
+  ValuedAction(group_ops(t.action_map, a.action), t.value_map * a.value)
+end
 
 struct Edge
   action::Action
@@ -384,24 +461,35 @@ function (mcts::MC)(st::State)
   for _ in 1:steps
     expand_leaf!(mcts, st)
   end
-  map_action, nst = normalized(st)
+  trans, nst = normalized(st)
   edges = mcts.cache[nst].edges
   edges[argmax([e.q for e in edges])].action
 end
 
 function rand_game_lengths()
   results = tmap(_->simulate(start_state, [rand_policy, rand_policy]), 8, 1:10)
-  println("$(sum(isnothing(r[1]) for r in results) / 10) were nothing")
-  histogram([r[2] for r in results if !isnothing(r[1])])
+  println("$(sum(isnothing(r.winner) for r in results) / 10) were nothing")
+  histogram([r.steps for r in results if !isnothing(r.winner)])
 end
 
 function ab_game_lengths()
   results = tmap(_->simulate(start_state, [AlphaBeta(3), rand_policy]), 8, 1:10)
   println("$(sum(isnothing(r[1]) for r in results) / 10) were nothing")
-  win_avg = mean([r[1] for r in results if !isnothing(r[1])])
+  win_avg = mean([r.winner for r in results if !isnothing(r.winner)])
   println("Average winner was $win_avg") 
-  histogram([r[2] for r in results if !isnothing(r[1])])
+  histogram([r.steps for r in results if !isnothing(r.winner)])
 end
+
+function precomp()
+  simulate(start_state, [AlphaBeta(2), rand_policy])
+end
+
+# TODO: 
+# For CachedMinimax, we can reuse the cache over multiple rounds.
+# Tag every node with which of the original actions used it.
+# After a round, sweep away nodes that were not used by the chosen action 
+# Depth is roughly 45. So in 4 steps, that's 4 million positions
+
 
 include("tests.jl")
 
