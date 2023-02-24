@@ -17,7 +17,7 @@ include("util.jl")
 
 const indent_level = Ref(0)
 
-const VALIDATE=true;
+const VALIDATE=false;
 
 indent!() = indent_level[] += 1
 
@@ -136,9 +136,11 @@ next_player(player::Int) = (1 ⊻ (player - 1)) + 1
 
 const Dir = Pos
 
-function encode(pieces)
+function encode(pieces::SMatrix)
   (pieces[2,:] .- 1) .* limits[1] .+ pieces[1,:]
 end
+
+encode(piece::SVector) = (piece[2] - 1) * limits[1] + piece[1]
 
 function assert_valid_state(st::State)
   for i in (1,2)
@@ -537,7 +539,7 @@ function expand_leaf!(mcts, nst::State)
     else
       edges = [rollout(nst, a) for a in actions(nst)]
       total_q = sum(e.q for e in edges)
-      parents = isnothing(parent_key) ? Set() : Set([parent_key])
+      parents = isnothing(parent_key) ? Set{BackEdge}() : Set([parent_key])
       mcts.cache[nst] = Node(mcts.time, 1, edges, parents)
       backprop(mcts, nst, discount * total_q, length(edges))
       return
@@ -632,9 +634,10 @@ end
 # Optimizations:
 # Encode and use bitvec instead of Dict for ball passing
 # Make simulate know the types of the players (by unrolling the loop and using tuples)
-# Disable all the validation checks
+# Disable bounds checks
 # Do stuff in parallel (and benchmark it)
 # Benchmark
+# Look at tools for type stability warnings in Julia
 
 # Fun:
 # Add GUI for human player 
