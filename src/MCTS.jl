@@ -10,7 +10,7 @@ using ThreadTools
 using Plots
 using StatsBase: mean
 
-export test, ab_game_lengths, simulate, start_state, rand_policy,
+export test, ab_game_lengths, simulate, start_state, Rand,
   AlphaBeta, precomp
 
 include("util.jl")
@@ -213,8 +213,9 @@ function shuffled_actions(st)
   sort(acts; by=a-> abs.(a.value), rev= true, alg=MergeSort) 
 end
 
+struct Rand end
 
-function rand_policy(st::State)
+function (::Rand)(st::State)
   choices = actions(st)
   choices[rand(1:length(choices))]
 end
@@ -292,7 +293,7 @@ function cached_max_action(st::State, depth::Int, cache::Dict)
     println("Reusing cache")
     trans(cache[nst])
   elseif depth == 0
-    chosen = rand_policy(nst)
+    chosen = Rand()(nst)
     trans(ValuedAction(chosen.action, 0))
   else
     best_child = mapreduce(larger_q, shuffled_actions(nst)) do a
@@ -331,7 +332,7 @@ Base.:*(a::Number, b::ValuedAction) = ValuedAction(b.action, a * b.value)
 
 function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth)
   if depth == 0
-    return ValuedAction(rand_policy(st).action, 0)
+    return ValuedAction(Rand()(st).action, 0)
   end
   for a in shuffled_actions(st) 
     next_st = @set apply_action(st, a).player = next_player(st.player)
@@ -355,7 +356,7 @@ end
 
 function max_action(st, alpha, beta, depth)
   if depth == 0
-    return ValuedAction(rand_policy(st).action, 0)
+    return ValuedAction(Rand()(st).action, 0)
   end
   for a in shuffled_actions(st)
     next_st = @set apply_action(st, a).player = next_player(st.player)
@@ -490,6 +491,7 @@ struct BackEdge
 end
 
 mutable struct Node
+  last_access::Int
   counts::Int
   edges::Vector{Edge}
   parents::Set{BackEdge}
@@ -497,12 +499,24 @@ end
 
 ucb(n::Int, e::Edge) = (e.q / e.n) + sqrt(2) * sqrt(log(n) / e.n)
 
-struct MC
-  cache::Dict{State, Node}
-  steps::Int
+Base.@kwdef mutable struct MC
+  time::Int = 0
+  cache::Dict{State, Node} = Dict{State, Node}()
+  cache_lim::Int = 5000
+  steps::Int = 100
 end
 
-MC(steps::Int) = MC(Dict{State,Node}(), steps)
+function gc!(mc::MC)
+  to_delete = Vector{State}()
+  for (k,v) in mc.cache
+    if v.last_access < mc.time
+      push!(to_delete, k)
+    end
+  end
+  for k in to_delete
+    delete!(mc.cache, k)
+  end
+end
 
 function expand_leaf!(mcts, nst::State)
   parent_key = nothing
@@ -524,7 +538,7 @@ function expand_leaf!(mcts, nst::State)
       edges = [rollout(nst, a) for a in actions(nst)]
       total_q = sum(e.q for e in edges)
       parents = isnothing(parent_key) ? Set() : Set([parent_key])
-      mcts.cache[nst] = Node(1, edges, parents)
+      mcts.cache[nst] = Node(mcts.time, 1, edges, parents)
       backprop(mcts, nst, discount * total_q, length(edges))
       return
     end
@@ -545,7 +559,7 @@ function backprop(mcts::MC, st::State, q::Float32, n::Int)
   end
 end
 
-const rand_players = fill(rand_policy, 2)
+const rand_players = fill(Rand(), 2)
 
 function rollout(st::State, a::ValuedAction)
   next_st = @set apply_action(st, a).player = 2
@@ -564,22 +578,26 @@ function rollout(st::State, a::ValuedAction)
 end
 
 function (mcts::MC)(st::State)
+  mcts.time += 1
   trans, nst = normalized(st)
   for _ in 1:mcts.steps
     expand_leaf!(mcts, nst)
+  end
+  if length(mcts.cache) > mcts.cache_lim
+    gc!(mcts)
   end
   edges = mcts.cache[nst].edges
   trans(ValuedAction(edges[argmax([e.q for e in edges])]))
 end
 
 function rand_game_lengths()
-  results = tmap(_->simulate(start_state, [rand_policy, rand_policy]), 8, 1:10)
+  results = tmap(_->simulate(start_state, rand_players), 8, 1:10)
   println("$(sum(isnothing(r.winner) for r in results) / 10) were nothing")
   histogram([r.steps for r in results if !isnothing(r.winner)])
 end
 
 function ab_game_lengths()
-  results = tmap(_->simulate(start_state, [AlphaBeta(3), rand_policy]), 8, 1:10)
+  results = tmap(_->simulate(start_state, [AlphaBeta(3), Rand()]), 8, 1:10)
   println("$(sum(isnothing(r.winner) for r in results) / 10) were nothing")
   win_avg = mean([r.winner for r in results if !isnothing(r.winner)])
   println("Average winner was $win_avg") 
@@ -587,7 +605,7 @@ function ab_game_lengths()
 end
 
 function mc_game_lengths()
-  results = tmap(_->simulate(start_state, [MC(20), rand_policy]; steps=300), 8, 1:10)
+  results = tmap(_->simulate(start_state, [MC(), Rand()]; steps=300), 8, 1:10)
   println("$(sum(isnothing(r.winner) for r in results) / 10) were nothing")
   win_avg = mean([r.winner for r in results if !isnothing(r.winner)])
   println("Average winner was $win_avg") 
@@ -596,7 +614,7 @@ end
 
 
 function precomp()
-  simulate(start_state, [AlphaBeta(2), rand_policy])
+  simulate(start_state, [AlphaBeta(2), Rand()])
 end
 
 # TODO: 
@@ -613,8 +631,13 @@ end
 
 # Optimizations:
 # Encode and use bitvec instead of Dict for ball passing
+# Make simulate know the types of the players (by unrolling the loop and using tuples)
 # Disable all the validation checks
+# Do stuff in parallel (and benchmark it)
+# Benchmark
 
+# Fun:
+# Add GUI for human player 
 
 include("tests.jl")
 

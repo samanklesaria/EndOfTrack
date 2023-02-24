@@ -11,22 +11,22 @@ function test()
         SMatrix{2,5}(Int8[collect(2:6) fill(4, 5)]'))]))
         
   println("AlphaBeta can see 1 step ahead")
-  r1 = simulate(st1, [AlphaBeta(3), rand_policy], steps=4, log=true)
+  r1 = simulate(st1, [AlphaBeta(3), Rand()], steps=4, log=true)
   @assert r1.winner == 1
   @assert r1.steps == 1
   
   println("MCTS can see 1 step ahead")
-  r1 = simulate(st1, [MC(10), rand_policy], steps=4; log=true)
+  r1 = simulate(st1, [MC(steps=10), Rand()], steps=4; log=true)
   @assert r1.winner == 1
   @assert r1.steps == 1
   
   println("CachedMinimax can see 1 steps ahead")
-  result = simulate(st1, [CachedMinimax(3), rand_policy], steps=4; log=true)
+  result = simulate(st1, [CachedMinimax(3), Rand()], steps=4; log=true)
   @assert result.winner == 1
   @assert r1.steps == 1
     
 
-  # Can in 2 steps
+  # Can win in 2 steps
   st2 = State(1, SVector{2}([
     PlayerState(
       SVector{2}([4,6]),
@@ -36,17 +36,17 @@ function test()
         SMatrix{2,5}(Int8[collect(2:6) fill(4, 5)]'))]))
         
   println("AlphaBeta can see 2 steps ahead")
-  r2 = simulate(st2, [AlphaBeta(3), rand_policy]; log=true)
+  r2 = simulate(st2, [AlphaBeta(3), Rand()]; log=true)
   @assert r2.winner == 1
   @assert r2.steps == 3
   
   println("MCTS can see 2 steps ahead")
-  r1 = simulate(st1, [MC(50), rand_policy]; log=true)
+  r1 = simulate(st1, [MC(steps=50), Rand()]; log=true)
   @assert r1.winner == 1
   @assert r1.steps == 1
   
   println("CachedMinimax can see 2 steps ahead")
-  result = simulate(st2, [CachedMinimax(3), rand_policy], steps=4, log=true)
+  result = simulate(st2, [CachedMinimax(3), Rand()], steps=4, log=true)
   @assert result.winner == 1
   @assert r2.steps == 3
       
