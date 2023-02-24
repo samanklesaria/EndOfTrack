@@ -17,6 +17,8 @@ include("util.jl")
 
 const indent_level = Ref(0)
 
+const VALIDATE=true;
+
 indent!() = indent_level[] += 1
 
 function dedent!()
@@ -150,7 +152,9 @@ function assert_valid_state(st::State)
 end
 
 function pass_actions(st::State, x::Pos)
-  assert_valid_state(st)
+  if VALIDATE
+    assert_valid_state(st)
+  end
   moves = Dict{Dir, PotentialMove}()
   for player in (st.player, next_player(st.player))
     vecs = st.positions[player].pieces .- x[:, na]
@@ -219,12 +223,14 @@ apply_action(st::State, a::Action) = unchecked_apply_action(st, a)
 
 function apply_action(st::State, va::ValuedAction)
   new_st = unchecked_apply_action(st, va.action)
-  try
-    assert_valid_state(new_st)
-  catch exc
-    println(st)
-    log_action(st, va)
-    rethrow() 
+  if VALIDATE
+    try
+      assert_valid_state(new_st)
+    catch exc
+      println(st)
+      log_action(st, va)
+      rethrow() 
+    end
   end
   new_st
 end
@@ -456,7 +462,9 @@ function normalized(st)
   end
   push!(action_map, TokenPerm(invperm(ixs.positions[1].pieces)))
   
-  assert_valid_state(st)
+  if VALIDATE
+    assert_valid_state(st)
+  end
   Transformation(action_map, value_map), st
 end
 
@@ -550,8 +558,8 @@ function rollout(st::State, a::ValuedAction)
     endq = -1f0
   end
   q = (discount ^ endst.steps) * endq
-  print("Rollout result ")
-  log_action(st, ValuedAction(a.action, q))
+  # print("Rollout result ")
+  # log_action(st, ValuedAction(a.action, q))
   Edge(a.action, q, 1)
 end
 
@@ -572,11 +580,20 @@ end
 
 function ab_game_lengths()
   results = tmap(_->simulate(start_state, [AlphaBeta(3), rand_policy]), 8, 1:10)
-  println("$(sum(isnothing(r[1]) for r in results) / 10) were nothing")
+  println("$(sum(isnothing(r.winner) for r in results) / 10) were nothing")
   win_avg = mean([r.winner for r in results if !isnothing(r.winner)])
   println("Average winner was $win_avg") 
   histogram([r.steps for r in results if !isnothing(r.winner)])
 end
+
+function mc_game_lengths()
+  results = tmap(_->simulate(start_state, [MC(20), rand_policy]; steps=300), 8, 1:10)
+  println("$(sum(isnothing(r.winner) for r in results) / 10) were nothing")
+  win_avg = mean([r.winner for r in results if !isnothing(r.winner)])
+  println("Average winner was $win_avg") 
+  histogram([r.steps for r in results if !isnothing(r.winner)])
+end
+
 
 function precomp()
   simulate(start_state, [AlphaBeta(2), rand_policy])

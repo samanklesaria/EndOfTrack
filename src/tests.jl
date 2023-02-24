@@ -11,12 +11,12 @@ function test()
         SMatrix{2,5}(Int8[collect(2:6) fill(4, 5)]'))]))
         
   println("AlphaBeta can see 1 step ahead")
-  r1 = simulate(st1, [AlphaBeta(3), rand_policy], steps=3, log=true)
+  r1 = simulate(st1, [AlphaBeta(3), rand_policy], steps=4, log=true)
   @assert r1.winner == 1
   @assert r1.steps == 1
   
   println("MCTS can see 1 step ahead")
-  r1 = simulate(st1, [MC(10), rand_policy], steps=2; log=true)
+  r1 = simulate(st1, [MC(10), rand_policy], steps=4; log=true)
   @assert r1.winner == 1
   @assert r1.steps == 1
   
