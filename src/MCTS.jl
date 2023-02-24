@@ -215,6 +215,8 @@ function rand_policy(st::State)
   choices[rand(1:length(choices))]
 end
 
+apply_action(st::State, a::Action) = unchecked_apply_action(st, a)
+
 function apply_action(st::State, va::ValuedAction)
   new_st = unchecked_apply_action(st, va.action)
   try
@@ -238,7 +240,7 @@ function unchecked_apply_action(st::State, a::Action)
   end
 end
 
-function log_action(st, action_val)
+function log_action(st, action_val::ValuedAction)
   action = action_val.action 
   val = action_val.value
   if action[1] < 6
@@ -256,15 +258,19 @@ struct EndState
   steps::Int
 end
 
-function simulate(st::State, players; steps=600)
-  println("Simulating on thread $(Threads.threadid())")
-  for nsteps in 1:steps
-    action = players[st.player](st)
-    log_action(st, action)
-    st = apply_action(st, action)
+function simulate(st::State, players; steps=300, log=false)
+  if log
+    println("Simulating on thread $(Threads.threadid())")
+  end
+  for nsteps in 0:steps
     if is_terminal(st)
-      return EndState(st.player, st, nsteps)
+      return EndState(next_player(st.player), st, nsteps)
     end
+    action = players[st.player](st)
+    if log
+      log_action(st, action)
+    end
+    st = apply_action(st, action)
     st = @set st.player = next_player(st.player) 
   end
   return EndState(nothing, st, steps)
@@ -436,45 +442,49 @@ function normalized(st)
     push!(action_map, FlipHor())
   end
   
-  # Flip the board left or right
-  st2 = fmap(flip_pos_vert, st)
-  if hash(st2) > hash(st)
-    st = st2
-    push!(action_map, FlipVert())
-  end
+  # # Flip the board left or right
+  # st2 = fmap(flip_pos_vert, st)
+  # if hash(st2) > hash(st)
+  #   st = st2
+  #   push!(action_map, FlipVert())
+  # end
   
-  # Sort tokens of each player
-  ixs = fmapstructure(a->sortperm(nestedview(a)), st; exclude=ismat)
-  st = fmap(st, ixs) do a, ix
-    if ix === (())
-      a
-    else
-      a[:, ix]
-    end
-  end
-  push!(action_map, TokenPerm(invperm(ixs.positions[1].pieces)))
+  # # Sort tokens of each player
+  # ixs = fmapstructure(a->sortperm(nestedview(a)), st; exclude=ismat)
+  # st = fmap(st, ixs) do a, ix
+  #   ix === (()) ? a : a[:, ix]
+  # end
+  # push!(action_map, TokenPerm(invperm(ixs.positions[1].pieces)))
   
   assert_valid_state(st)
   Transformation(action_map, value_map), st
 end
 
-group_ops(_, a::Nothing) = a
-group_ops(ops::Vector{GroupElt}, a::Action) = foldr(group_op, ops; init=a)
-
 function (t::Transformation)(a::ValuedAction)
-  ValuedAction(group_ops(t.action_map, a.action), t.value_map * a.value)
+  ValuedAction(t(a.action), t.value_map * a.value)
 end
 
-struct Edge
+(t::Transformation)(a::Action) = foldr(group_op, t.action_map; init=a)
+(t::Transformation)(::Nothing) = nothing
+
+mutable struct Edge
   action::Action
-  q::Float64
+  q::Float32
   n::Int
 end
 
-struct Node
+ValuedAction(e::Edge) = ValuedAction(e.action, e.q / e.n)
+
+struct BackEdge
+  ix::Int8
+  state::State
+  trans::Transformation
+end
+
+mutable struct Node
   counts::Int
   edges::Vector{Edge}
-  parents::Set{Tuple{Int8, State}}
+  parents::Set{BackEdge}
 end
 
 ucb(n::Int, e::Edge) = (e.q / e.n) + sqrt(2) * sqrt(log(n) / e.n)
@@ -484,17 +494,74 @@ struct MC
   steps::Int
 end
 
-function expand_leaf!(mcts, st::State)
-  # TODO
+MC(steps::Int) = MC(Dict{State,Node}(), steps)
+
+function expand_leaf!(mcts, nst::State)
+  parent_key = nothing
+  while true
+    if haskey(mcts.cache, nst)
+      c = mcts.cache[nst]
+      if !isnothing(parent_key)
+        push!(c.parents, parent_key)
+      end
+      ix = argmax([ucb(c.counts, e) for e in c.edges])
+      next_st = @set apply_action(nst, c.edges[ix].action).player = 2
+      if is_terminal(next_st)
+        return
+      end
+      trans, new_nst = normalized(next_st)
+      parent_key = BackEdge(ix, nst, trans)
+      nst = new_nst
+    else
+      edges = [rollout(nst, a) for a in actions(nst)]
+      total_q = sum(e.q for e in edges)
+      parents = isnothing(parent_key) ? Set() : Set([parent_key])
+      mcts.cache[nst] = Node(1, edges, parents)
+      backprop(mcts, nst, discount * total_q, length(edges))
+      return
+    end
+  end
+end
+
+function backprop(mcts::MC, st::State, q::Float32, n::Int)
+  node = mcts.cache[st]
+  to_process = [(p,q) for p in node.parents]
+  while length(to_process) > 0
+    b, q = pop!(to_process)
+    edge = mcts.cache[b.state].edges[b.ix]
+    edge.q += b.trans.value_map * q
+    edge.n += n
+    for p in mcts.cache[b.state].parents
+      push!(to_process, (p, discount * q))
+    end
+  end
+end
+
+const rand_players = fill(rand_policy, 2)
+
+function rollout(st::State, a::ValuedAction)
+  next_st = @set apply_action(st, a).player = 2
+  endst = simulate(next_st, rand_players)
+  if isnothing(endst.winner)
+    endq = 0f0
+  elseif endst.winner == 1
+    endq = 1f0
+  else
+    endq = -1f0
+  end
+  q = (discount ^ endst.steps) * endq
+  print("Rollout result ")
+  log_action(st, ValuedAction(a.action, q))
+  Edge(a.action, q, 1)
 end
 
 function (mcts::MC)(st::State)
-  for _ in 1:steps
-    expand_leaf!(mcts, st)
-  end
   trans, nst = normalized(st)
+  for _ in 1:mcts.steps
+    expand_leaf!(mcts, nst)
+  end
   edges = mcts.cache[nst].edges
-  edges[argmax([e.q for e in edges])].action
+  trans(ValuedAction(edges[argmax([e.q for e in edges])]))
 end
 
 function rand_game_lengths()
@@ -520,6 +587,9 @@ end
 # Tag every node with which of the original actions used it.
 # After a round, sweep away nodes that were not used by the chosen action 
 # Depth is roughly 45. So in 4 steps, that's 4 million positions
+
+# For MCTS, no need to expand all the nodes. Initialize them all
+# with their hueristic values, and go from there
 
 # Hueristics:
 # Position of the ball? Highest player position?
