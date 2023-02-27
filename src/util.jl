@@ -20,4 +20,4 @@ function foldmap(f, agg, init, args...; exclude=Functors.isleaf)
     fmap(w, identity, args...)
 end
 
-na = [CartesianIndex()]
+const na = @SVector [CartesianIndex()]

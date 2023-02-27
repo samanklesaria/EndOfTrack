@@ -6,6 +6,9 @@ using Random
 using Functors
 using ArraysOfArrays
 using ThreadTools
+using StatsBase
+using LogExpFunctions
+using Unrolled
 
 using Plots
 using StatsBase: mean
@@ -17,7 +20,7 @@ include("util.jl")
 
 const indent_level = Ref(0)
 
-const VALIDATE=false;
+const VALIDATE=true;
 
 indent!() = indent_level[] += 1
 
@@ -136,11 +139,11 @@ next_player(player::Int) = (1 ⊻ (player - 1)) + 1
 
 const Dir = Pos
 
-function encode(pieces::SMatrix)
+function encode(pieces::AbstractMatrix)
   (pieces[2,:] .- 1) .* limits[1] .+ pieces[1,:]
 end
 
-encode(piece::SVector) = (piece[2] - 1) * limits[1] + piece[1]
+encode(piece::AbstractVector) = (piece[2] - 1) * limits[1] + piece[1]
 
 function assert_valid_state(st::State)
   for i in (1,2)
@@ -222,6 +225,18 @@ function (::Rand)(st::State)
   choices[rand(1:length(choices))]
 end
 
+struct Boltzmann
+  temp::Float32
+end
+
+function (b::Boltzmann)(st::State)
+  choices = actions(st)
+  player = st.player == 1 ? 1 : -1
+  probs = [player .* c.value ./ b.temp for c in choices]
+  softmax!(probs)
+  sample(choices, Weights(probs))
+end
+
 apply_action(st::State, a::Action) = unchecked_apply_action(st, a)
 
 function apply_action(st::State, va::ValuedAction)
@@ -249,6 +264,10 @@ function unchecked_apply_action(st::State, a::Action)
   end
 end
 
+badboy = MCTS.State(1, MCTS.PlayerState[MCTS.PlayerState(Int8[4, 1], Int8[4 3 4 5 6; 6 1 1 1 1]), MCTS.PlayerState(Int8[2, 8], Int8[1 3 5 3 2; 1 5 5 7 8])])
+# [0.0] 1 moves from Int8[4, 1] to Int8[2, 3]
+
+
 function log_action(st, action_val::ValuedAction)
   action = action_val.action 
   val = action_val.value
@@ -267,6 +286,9 @@ struct EndState
   steps::Int
 end
 
+# [0.0] 1 moves from Int8[4, 5] to Int8[7, 3]
+# problem_state = MCTS.State(1, MCTS.PlayerState[MCTS.PlayerState(Int8[4, 5], Int8[5 4 4 6 4; 2 5 1 1 4]), MCTS.PlayerState(Int8[5, 4], Int8[5 5 1 3 6; 4 6 7 5 8])])
+
 function simulate(st::State, players; steps=300, log=false)
   if log
     println("Simulating on thread $(Threads.threadid())")
@@ -284,6 +306,31 @@ function simulate(st::State, players; steps=300, log=false)
   end
   return EndState(nothing, st, steps)
 end
+
+# function simulate(st::State, players; steps=300, log=false)
+#   player_ixs = st.player == 1 ? (0=>1,1=>2) : (0=>2,1=>1)
+#   if log
+#     println("Simulating on thread $(Threads.threadid())")
+#   end
+#   simulate_(st, players, player_ixs, steps, log)
+# end
+
+# @unroll function simulate_(st::State, players, player_ixs, steps, log)
+#   for nsteps in 1:steps
+#     @unroll for (substep, player) in player_ixs
+#       st = @set st.player = player
+#       if is_terminal(st)
+#         return EndState(next_player(player), st, nsteps + substep)
+#       end
+#       action = players[player](st)
+#       if log
+#         log_action(st, action)
+#       end
+#       st = apply_action(st, action)
+#     end
+#   end
+#   return EndState(nothing, st, steps)
+# end
 
 larger_q(a, b) = a.value > b.value ? a : b
 
@@ -452,13 +499,13 @@ function normalized(st)
   end
   
   # # Flip the board left or right
-  st2 = fmap(flip_pos_vert, st)
-  if hash(st2) > hash(st)
-    st = st2
-    push!(action_map, FlipVert())
-  end
+  # st2 = fmap(flip_pos_vert, st)
+  # if hash(st2) > hash(st)
+  #   st = st2
+  #   push!(action_map, FlipVert())
+  # end
   
-  # # Sort tokens of each player
+  # Sort tokens of each player
   ixs = fmapstructure(a->sortperm(nestedview(a)), st; exclude=ismat)
   st = fmap(st, ixs) do a, ix
     ix === (()) ? a : a[:, ix]
@@ -520,11 +567,20 @@ function gc!(mc::MC)
   end
 end
 
+# TODO: Must filter out any actions that would take you
+# to your current mcts time before taking argmax. 
+# ALSO: What if we just did the simple AlphaGo heuristic instead?
+# TODO: update access times. While we're single threaded, okay
+# to mutate the access time for each expand_leaf! call.
+
 function expand_leaf!(mcts, nst::State)
   parent_key = nothing
   while true
     if haskey(mcts.cache, nst)
       c = mcts.cache[nst]
+      if c.last_access == mcts.time
+        return
+      end
       if !isnothing(parent_key)
         push!(c.parents, parent_key)
       end
@@ -553,19 +609,21 @@ function backprop(mcts::MC, st::State, q::Float32, n::Int)
   while length(to_process) > 0
     b, q = pop!(to_process)
     edge = mcts.cache[b.state].edges[b.ix]
-    edge.q += b.trans.value_map * q
+    trans_q = b.trans.value_map * q
+    edge.q += trans_q
     edge.n += n
     for p in mcts.cache[b.state].parents
-      push!(to_process, (p, discount * q))
+      push!(to_process, (p, discount * trans_q))
     end
   end
 end
 
-const rand_players = fill(Rand(), 2)
+const rand_players = (Rand(), Rand())
+const boltz_players = (Boltzmann(0.2), Boltzmann(0.2))
 
 function rollout(st::State, a::ValuedAction)
   next_st = @set apply_action(st, a).player = 2
-  endst = simulate(next_st, rand_players)
+  endst = simulate(next_st, boltz_players; steps=10)
   if isnothing(endst.winner)
     endq = 0f0
   elseif endst.winner == 1
@@ -586,10 +644,17 @@ function (mcts::MC)(st::State)
     expand_leaf!(mcts, nst)
   end
   if length(mcts.cache) > mcts.cache_lim
+    println("GC")
     gc!(mcts)
+    println("done")
   end
   edges = mcts.cache[nst].edges
-  trans(ValuedAction(edges[argmax([e.q for e in edges])]))
+  # println("Options:")
+  # for e in edges
+  #   log_action(st, ValuedAction(e))
+  # end
+  # println("Done")
+  trans(ValuedAction(edges[argmax([e.q / e.n for e in edges])]))
 end
 
 function rand_game_lengths()
@@ -599,7 +664,7 @@ function rand_game_lengths()
 end
 
 function ab_game_lengths()
-  results = tmap(_->simulate(start_state, [AlphaBeta(3), Rand()]), 8, 1:10)
+  results = tmap(_->simulate(start_state, (AlphaBeta(3), Rand())), 8, 1:10)
   println("$(sum(isnothing(r.winner) for r in results) / 10) were nothing")
   win_avg = mean([r.winner for r in results if !isnothing(r.winner)])
   println("Average winner was $win_avg") 
@@ -607,17 +672,19 @@ function ab_game_lengths()
 end
 
 function mc_game_lengths()
-  results = tmap(_->simulate(start_state, [MC(), Rand()]; steps=300), 8, 1:10)
+  results = tmap(_->simulate(start_state, (MC(), Rand()); steps=300), 8, 1:10)
   println("$(sum(isnothing(r.winner) for r in results) / 10) were nothing")
   win_avg = mean([r.winner for r in results if !isnothing(r.winner)])
   println("Average winner was $win_avg") 
   histogram([r.steps for r in results if !isnothing(r.winner)])
 end
 
-
-function precomp()
-  simulate(start_state, [AlphaBeta(2), Rand()])
+function blah()
+  simulate(start_state, (MC(), Rand()); steps=300)
 end
+# NOW:
+# Ensure now MCTS loops
+# Sample proportionally to hueristic
 
 # TODO: 
 # For CachedMinimax, we can reuse the cache over multiple rounds.
