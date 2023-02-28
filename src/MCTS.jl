@@ -14,185 +14,18 @@ using Plots
 using StatsBase: mean
 
 export test, ab_game_lengths, simulate, start_state, Rand,
-  AlphaBeta, precomp
-
-include("util.jl")
-
-const indent_level = Ref(0)
+  AlphaBeta
 
 const VALIDATE=true;
 
-indent!() = indent_level[] += 1
-
-function dedent!()
-  @assert indent_level[] > 0
-  indent_level[] -= 1
-end
-
-function printindent(a)
-  print(String(fill(' ', 4 * indent_level[])))
-  print(a)
-end
-
-const limits = @SVector [7, 8]
+include("rules.jl")
+include("util.jl")
+include("searches.jl")
+include("groupops.jl")
+include("tests.jl")
 
 const discount = 0.99f0
 const inv_discount = 1/discount
-
-const Pos = SVector{2, Int8}
-
-struct PlayerState
-  ball::Pos
-  pieces::SMatrix{2,5, Int8}
-end
-@functor PlayerState
-
-struct State
-  player::Int
-  positions::SVector{2, PlayerState}
-end
-@functor State (positions,)
-
-const start_state = State(1, 
-  SVector{2}([
-    PlayerState(
-      SVector{2}([4,1]),
-      SMatrix{2,5}(Int8[collect(2:6) fill(1, 5)]')),
-    PlayerState(
-      SVector{2}([4,8]),
-      SMatrix{2,5}(Int8[collect(2:6) fill(8, 5)]'))
-      ]))
- 
-function is_terminal(state)
-  state.positions[1].ball[2] == limits[2] || state.positions[2].ball[2] == 1
-end
-
-function occupied(state, y)
-  inner(p::SMatrix) = any(all(p .== y[:, na]; dims=1))
-  inner(_) = false
-  foldmap(inner, Base.:|, false, state)
-end
-
-struct PotentialMove
-  y::Pos
-  norm::Int8
-end
-
-function lub(a::PotentialMove, b::PotentialMove)
-  if a.norm < b.norm
-    return a
-  end
-  if a.norm == b.norm
-    error("Two pieces at the same position: ", a.y, ", ", b.y)
-  end
-  return b
-end
-
-const PieceIx = UInt8
-const Action = Tuple{PieceIx, Pos}
-
-struct ValuedAction
-  action::Union{Action, Nothing}
-  value::Float32
-end
-
-function piece_actions(st::State)
-  actions = Vector{Action}()
-  ball_pos = st.positions[st.player].ball
-  for i in 1:5
-    x = st.positions[st.player].pieces[:, i]
-    if any(x .!= ball_pos)
-      for move in (SVector{2}([1,2]), SVector{2}([2,1]))
-        for d1 in (-1, 1)
-          for d2 in (-1, 1)
-            pos = x .+ move .* (@SVector [d1, d2])
-            if all(pos .>= 1) && all(pos .<= limits) && !occupied(st, pos)
-              push!(actions, (i, pos))
-            end
-          end
-        end
-      end
-    end
-  end
-  actions
-end
-
-function ball_actions(st::State)
-  y = st.positions[st.player].ball
-  passes = Set{Pos}([y])
-  balls = [y]
-  while length(balls) > 0
-    x = pop!(balls)
-    for move in pass_actions(st, x)
-      yy = move.y
-      if yy ∉ passes 
-        push!(passes, yy)
-        push!(balls, yy)
-      end
-    end
-  end
-  pop!(passes, y)
-  [(UInt8(6), p) for p in passes]
-end
-
-next_player(player::Int) = (1 ⊻ (player - 1)) + 1
-
-const Dir = Pos
-
-function encode(pieces::AbstractMatrix)
-  (pieces[2,:] .- 1) .* limits[1] .+ pieces[1,:]
-end
-
-encode(piece::AbstractVector) = (piece[2] - 1) * limits[1] + piece[1]
-
-function assert_valid_state(st::State)
-  for i in (1,2)
-    encoded = encode(st.positions[i].pieces)
-    @assert length(encoded) == length(unique(encoded))
-    ball_pos = encode(st.positions[i].ball[:, na])
-    @assert ball_pos[1] in encoded
-    @assert all(st.positions[i].pieces .>= 1)
-    @assert all(st.positions[i].pieces .<= limits[:, na])
-  end
-end
-
-function pass_actions(st::State, x::Pos)
-  if VALIDATE
-    assert_valid_state(st)
-  end
-  moves = Dict{Dir, PotentialMove}()
-  for player in (st.player, next_player(st.player))
-    vecs = st.positions[player].pieces .- x[:, na]
-    absvecs = abs.(vecs)
-    diagonals = absvecs[1, :] .== absvecs[2, :]
-    verticals = vecs[1, :] .== 0
-    horizontals = vecs[1, :] .== 0
-    norms = maximum(absvecs; dims=1)[1, :]
-    nz = norms .> 0
-    valid = (diagonals .| verticals .| horizontals) .& nz
-    norms = norms[valid]
-    units = vecs[:, valid] .÷ norms[na, :]
-    y = st.positions[player].pieces[:, valid]
-    if player == st.player
-      for i in 1:size(units, 2)
-        u = SVector{2}(units[:, i])
-        if haskey(moves, u)
-          moves[u] = lub(moves[u], PotentialMove(y[:,i], norms[i]))
-        else
-          moves[u] = PotentialMove(y[:,i], norms[i])
-        end
-      end
-    else
-      for i in 1:size(units, 2)
-        u = SVector{2}(units[:, i])
-        if haskey(moves, u) && norms[i] < moves[u].norm
-          pop!(moves, u)
-        end
-      end
-    end
-  end
-  values(moves)
-end
 
 function actions(st)
   [apply_hueristic(st, a) for a in Iterators.flatten(
@@ -237,6 +70,17 @@ function (b::Boltzmann)(st::State)
   sample(choices, Weights(probs))
 end
 
+struct Greedy end
+
+function (b::Greedy)(st::State)
+  choices = actions(st)
+  player = st.player == 1 ? 1 : -1
+  probs = [player * c.value for c in choices]
+  ix = argmax(probs)
+  mask = (probs .== probs[ix])
+  rand(choices[mask])
+end
+
 apply_action(st::State, a::Action) = unchecked_apply_action(st, a)
 
 function apply_action(st::State, va::ValuedAction)
@@ -264,266 +108,54 @@ function unchecked_apply_action(st::State, a::Action)
   end
 end
 
-badboy = MCTS.State(1, MCTS.PlayerState[MCTS.PlayerState(Int8[4, 1], Int8[4 3 4 5 6; 6 1 1 1 1]), MCTS.PlayerState(Int8[2, 8], Int8[1 3 5 3 2; 1 5 5 7 8])])
-# [0.0] 1 moves from Int8[4, 1] to Int8[2, 3]
-
-
-function log_action(st, action_val::ValuedAction)
-  action = action_val.action 
-  val = action_val.value
-  if action[1] < 6
-    old_pos = st.positions[st.player].pieces[:, action[1]]
-    println("[$val] $(st.player) moves from $old_pos to $(action[2])")
-  else
-    old_pos = st.positions[st.player].ball
-    println("[$val] $(st.player) kicks from $old_pos to $(action[2])")
-  end
-end
-
 struct EndState
   winner::Union{Int8, Nothing}
   st::State
   steps::Int
 end
 
-# [0.0] 1 moves from Int8[4, 5] to Int8[7, 3]
-# problem_state = MCTS.State(1, MCTS.PlayerState[MCTS.PlayerState(Int8[4, 5], Int8[5 4 4 6 4; 2 5 1 1 4]), MCTS.PlayerState(Int8[5, 4], Int8[5 5 1 3 6; 4 6 7 5 8])])
-
-function simulate(st::State, players; steps=300, log=false)
-  if log
-    println("Simulating on thread $(Threads.threadid())")
-  end
-  for nsteps in 0:steps
-    if is_terminal(st)
-      return EndState(next_player(st.player), st, nsteps)
-    end
-    action = players[st.player](st)
-    if log
-      log_action(st, action)
-    end
-    st = apply_action(st, action)
-    st = @set st.player = next_player(st.player) 
-  end
-  return EndState(nothing, st, steps)
-end
-
 # function simulate(st::State, players; steps=300, log=false)
-#   player_ixs = st.player == 1 ? (0=>1,1=>2) : (0=>2,1=>1)
-#   if log
-#     println("Simulating on thread $(Threads.threadid())")
-#   end
-#   simulate_(st, players, player_ixs, steps, log)
-# end
-
-# @unroll function simulate_(st::State, players, player_ixs, steps, log)
-#   for nsteps in 1:steps
-#     @unroll for (substep, player) in player_ixs
-#       st = @set st.player = player
-#       if is_terminal(st)
-#         return EndState(next_player(player), st, nsteps + substep)
-#       end
-#       action = players[player](st)
-#       if log
-#         log_action(st, action)
-#       end
-#       st = apply_action(st, action)
+#   # if log
+#   #   println("Simulating on thread $(Threads.threadid())")
+#   # end
+#   for nsteps in 0:steps
+#     if is_terminal(st)
+#       return EndState(next_player(st.player), st, nsteps)
 #     end
+#     action = players[st.player](st)
+#     if log
+#       log_action(st, action)
+#     end
+#     st = apply_action(st, action)
+#     st = @set st.player = next_player(st.player) 
 #   end
 #   return EndState(nothing, st, steps)
 # end
 
-larger_q(a, b) = a.value > b.value ? a : b
-
-function cached_max_action(st::State, depth::Int, cache::Dict)
-  trans, nst = normalized(st)
-  if is_terminal(nst)
-    trans(ValuedAction(nothing, -1))
-  elseif haskey(cache, nst)
-    println("Reusing cache")
-    trans(cache[nst])
-  elseif depth == 0
-    chosen = Rand()(nst)
-    trans(ValuedAction(chosen.action, 0))
-  else
-    best_child = mapreduce(larger_q, shuffled_actions(nst)) do a
-      next_st = @set apply_action(nst, a).player = 2
-      child_val = cached_max_action(next_st, depth - 1, cache).value
-      ValuedAction(a.action, discount * child_val)
-    end
-    cache[nst] = best_child
-    trans(best_child)
+function simulate(st::State, players; steps=300, log=false)
+  player_ixs = st.player == 1 ? (0=>1,1=>2) : (0=>2,1=>1)
+  if log
+    println("Simulating on thread $(Threads.threadid())")
   end
+  simulate_(st, players, player_ixs, steps, log)
 end
 
-function plot_state(st::State)
-  scatter(st.positions[1].pieces[1, :],
-    st.positions[1].pieces[2, :])
-  scatter!(st.positions[1].ball[1:1], st.positions[1].ball[2:2])
-  scatter!(st.positions[2].pieces[1,:],
-    st.positions[2].pieces[2, :])
-  scatter!(st.positions[2].ball[1:1], st.positions[2].ball[2:2])
-end
-
-struct CachedMinimax
-  depth::Int
-end
-
-function (mm::CachedMinimax)(st::State)
-  cache = Dict{State, ValuedAction}()
-  cached_max_action(st, mm.depth, cache)
-end
-
-const eps = 1e-3
-const no_min_action = ValuedAction(nothing, 1 + eps)
-const no_max_action = ValuedAction(nothing, -1 - eps)
-
-Base.:*(a::Number, b::ValuedAction) = ValuedAction(b.action, a * b.value)
-
-function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth)
-  if depth == 0
-    return ValuedAction(Rand()(st).action, 0)
-  end
-  for a in shuffled_actions(st) 
-    next_st = @set apply_action(st, a).player = next_player(st.player)
-    if is_terminal(next_st)
-      return ValuedAction(a.action, -1)
-    else
-      lb = discount * max_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1)
-      if lb.value < beta.value
-        beta = ValuedAction(a.action, lb.value)
-        if alpha.value > beta.value
-          return alpha
-        end
-        if alpha.value == beta.value
-          return beta
-        end
+@unroll function simulate_(st::State, players, player_ixs, steps, log)
+  for nsteps in 0:steps
+    @unroll for (substep, player) in player_ixs
+      st = @set st.player = player
+      if is_terminal(st)
+        return EndState(next_player(player), st, 2 * nsteps + substep)
       end
-    end
-  end
-  beta
-end
-
-function max_action(st, alpha, beta, depth)
-  if depth == 0
-    return ValuedAction(Rand()(st).action, 0)
-  end
-  for a in shuffled_actions(st)
-    next_st = @set apply_action(st, a).player = next_player(st.player)
-    if is_terminal(next_st)
-      return ValuedAction(a.action, 1)
-    else
-      ub = discount * min_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1)
-      the_action = ValuedAction(a.action, ub.value)
-      if ub.value > alpha.value
-        alpha = the_action
-        if alpha.value > beta.value
-          return beta
-        end
-        if alpha.value == beta.value
-          return alpha
-        end
+      action = players[player](st)
+      if log
+        log_action(st, action)
       end
+      st = apply_action(st, action)
     end
   end
-  alpha
+  return EndState(nothing, st, steps)
 end
-
-struct AlphaBeta
-  depth::Int
-end
-
-function (ab::AlphaBeta)(st)
-  if st.player == 1
-    max_action(st, no_max_action, no_min_action, ab.depth)
-  else
-    min_action(st, no_max_action, no_min_action, ab.depth)
-  end
-end
-
-abstract type GroupElt end
-
-struct TokenPerm <: GroupElt
-  perm::SVector{5, UInt8}
-end
-
-struct FlipHor <: GroupElt end
-
-struct FlipVert <: GroupElt end
-
-const mean_vert = SVector{2, Int8}([4, 0])
-const flip_vert = SVector{2, Int8}([-1, 1])
-
-const mean_hor = SVector{2}([0, 4.5])
-const flip_hor = SVector{2}([1, -1])
-
-flip_pos_vert(a::Pos) = flip_vert .* (a .- mean_vert) .+ mean_vert
-flip_pos_vert(a::SMatrix) = flip_vert[:, na] .* (a .- mean_vert[:, na]) .+ mean_vert[:, na]
-
-flip_pos_hor(a::Pos) = Pos(flip_hor .* (a .- mean_hor) .+ mean_hor)
-flip_pos_hor(a::SMatrix) = SMatrix{2,5, Int8}(flip_hor[:, na] .* (a .- mean_hor[:, na]) .+ mean_hor[:, na])
-
-function group_op(::FlipVert, a::Action)
-  @set a[2] = flip_pos_vert(a[2])
-end
-
-function group_op(::FlipHor, a::Action)
-  @set a[2] = flip_pos_hor(a[2])
-end
-
-function group_op(p::TokenPerm, a::Action) 
-  if a[1] < 6
-    @set a[1] = p.perm[a[1]]
-  else
-    a
-  end
-end
-
-ismat(::SMatrix) = true
-ismat(_) = false
-
-struct Transformation
-  action_map::Vector{GroupElt}
-  value_map::Int
-end
-
-function normalized(st)
-  action_map = GroupElt[]
-  value_map = 1
-  
-  # Swap players so that the current player is 1.
-  if st.player == 2
-    st = fmap(flip_pos_hor, st)
-    st = State(1, reverse(st.positions))
-    value_map = -1
-    push!(action_map, FlipHor())
-  end
-  
-  # # Flip the board left or right
-  # st2 = fmap(flip_pos_vert, st)
-  # if hash(st2) > hash(st)
-  #   st = st2
-  #   push!(action_map, FlipVert())
-  # end
-  
-  # Sort tokens of each player
-  ixs = fmapstructure(a->sortperm(nestedview(a)), st; exclude=ismat)
-  st = fmap(st, ixs) do a, ix
-    ix === (()) ? a : a[:, ix]
-  end
-  push!(action_map, TokenPerm(invperm(ixs.positions[1].pieces)))
-  
-  if VALIDATE
-    assert_valid_state(st)
-  end
-  Transformation(action_map, value_map), st
-end
-
-function (t::Transformation)(a::ValuedAction)
-  ValuedAction(t(a.action), t.value_map * a.value)
-end
-
-(t::Transformation)(a::Action) = foldr(group_op, t.action_map; init=a)
-(t::Transformation)(::Nothing) = nothing
 
 mutable struct Edge
   action::Action
@@ -550,15 +182,17 @@ ucb(n::Int, e::Edge) = (e.q / e.n) + sqrt(2) * sqrt(log(n) / e.n)
 
 Base.@kwdef mutable struct MC
   time::Int = 0
+  last_move_time::Int = 0
   cache::Dict{State, Node} = Dict{State, Node}()
-  cache_lim::Int = 5000
+  cache_lim::Int = 100
   steps::Int = 100
 end
 
+# TODO: need to invalidate parent pointers too
 function gc!(mc::MC)
   to_delete = Vector{State}()
   for (k,v) in mc.cache
-    if v.last_access < mc.time
+    if v.last_access < mc.last_move_time
       push!(to_delete, k)
     end
   end
@@ -567,24 +201,33 @@ function gc!(mc::MC)
   end
 end
 
-# TODO: Must filter out any actions that would take you
-# to your current mcts time before taking argmax. 
 # ALSO: What if we just did the simple AlphaGo heuristic instead?
-# TODO: update access times. While we're single threaded, okay
-# to mutate the access time for each expand_leaf! call.
+
+# In a multi-threaded context, can use relativistic time: (thread, time) tuple. 
+
+# Why is it only 0.93 for a move to (4,8)?
+# We should have it hard coded to always prefer moves that end the game
+
+
+# TODO: The first time the parent size goes above 1, pause to check that
+# this makes sense. 
 
 function expand_leaf!(mcts, nst::State)
   parent_key = nothing
+  mcts.time += 1
   while true
     if haskey(mcts.cache, nst)
       c = mcts.cache[nst]
       if c.last_access == mcts.time
         return
       end
+      c.last_access = mcts.time
       if !isnothing(parent_key)
         push!(c.parents, parent_key)
       end
       ix = argmax([ucb(c.counts, e) for e in c.edges])
+      # print("Traversing Edge ")
+      # log_action(nst, ValuedAction(c.edges[ix].action, 0))
       next_st = @set apply_action(nst, c.edges[ix].action).player = 2
       if is_terminal(next_st)
         return
@@ -593,7 +236,10 @@ function expand_leaf!(mcts, nst::State)
       parent_key = BackEdge(ix, nst, trans)
       nst = new_nst
     else
+      # println("Expanding Leaf")
+      # indent!()
       edges = [rollout(nst, a) for a in actions(nst)]
+      # dedent!()
       total_q = sum(e.q for e in edges)
       parents = isnothing(parent_key) ? Set{BackEdge}() : Set([parent_key])
       mcts.cache[nst] = Node(mcts.time, 1, edges, parents)
@@ -603,27 +249,51 @@ function expand_leaf!(mcts, nst::State)
   end
 end
 
+# It also seems like batching backprop might be useful.
+# Many of your paths will go through the same node, so
+# rather than doing them individually, do them all at once.
+# Instead of a queue, you'll need to use a hashtable. 
+
+
+# But also: what's really taking so much time?
+# How long are the backprop steps? What's the branching factor?
+
+
+
+# It seems like this is taking a very long time. 
+# Why? are there loops in the back-edges?
+# Doing gc would help matters, so there's less parents to follow.
+
 function backprop(mcts::MC, st::State, q::Float32, n::Int)
   node = mcts.cache[st]
-  to_process = [(p,q) for p in node.parents]
+  to_process = [(p,q,node) for p in node.parents]
   while length(to_process) > 0
-    b, q = pop!(to_process)
-    edge = mcts.cache[b.state].edges[b.ix]
+    b, q, child = pop!(to_process)
+    if !haskey(mcts.cache, b.state)
+      delete!(child.parents, b.state)
+    end
+    node = mcts.cache[b.state]
+    edge = node.edges[b.ix]
     trans_q = b.trans.value_map * q
     edge.q += trans_q
     edge.n += n
-    for p in mcts.cache[b.state].parents
-      push!(to_process, (p, discount * trans_q))
+    # if length(node.parents) > 9
+    #   println("Parent size ", length(node.parents))
+    # end
+    for p in node.parents
+      push!(to_process, (p, discount * trans_q, node))
     end
   end
 end
 
 const rand_players = (Rand(), Rand())
-const boltz_players = (Boltzmann(0.2), Boltzmann(0.2))
+const greedy_players = (Greedy(), Greedy())
 
 function rollout(st::State, a::ValuedAction)
+  # printindent("Starting Rollout of ")
+  # log_action(st, a)
   next_st = @set apply_action(st, a).player = 2
-  endst = simulate(next_st, boltz_players; steps=10)
+  endst = simulate(next_st, greedy_players; steps=10)
   if isnothing(endst.winner)
     endq = 0f0
   elseif endst.winner == 1
@@ -632,28 +302,28 @@ function rollout(st::State, a::ValuedAction)
     endq = -1f0
   end
   q = (discount ^ endst.steps) * endq
-  # print("Rollout result ")
+  # printindent("$(endst.steps) step rollout: ")
   # log_action(st, ValuedAction(a.action, q))
   Edge(a.action, q, 1)
 end
 
 function (mcts::MC)(st::State)
-  mcts.time += 1
+  mcts.last_move_time = mcts.time
   trans, nst = normalized(st)
   for _ in 1:mcts.steps
     expand_leaf!(mcts, nst)
   end
-  if length(mcts.cache) > mcts.cache_lim
-    println("GC")
+  if true # length(mcts.cache) > mcts.cache_lim
     gc!(mcts)
-    println("done")
   end
   edges = mcts.cache[nst].edges
   # println("Options:")
+  # indent!()
   # for e in edges
+  #   printindent("")
   #   log_action(st, ValuedAction(e))
   # end
-  # println("Done")
+  # dedent!()
   trans(ValuedAction(edges[argmax([e.q / e.n for e in edges])]))
 end
 
@@ -680,17 +350,19 @@ function mc_game_lengths()
 end
 
 function blah()
-  simulate(start_state, (MC(), Rand()); steps=300)
+  simulate(start_state, (MC(steps=20), AlphaBeta(3)); steps=300, log=true)
 end
-# NOW:
-# Ensure now MCTS loops
-# Sample proportionally to hueristic
 
-# TODO: 
-# For CachedMinimax, we can reuse the cache over multiple rounds.
-# Tag every node with which of the original actions used it.
-# After a round, sweep away nodes that were not used by the chosen action 
-# Depth is roughly 45. So in 4 steps, that's 4 million positions
+# Potential things:
+# The GC could prune earler, by removing everything not touched by the chosen action
+# We could only update backwards on the actual path taken rather than all parents. 
+# Or, a middle ground: only keep around the past k parents. 
+# Could also not do state sharing.
+
+
+# TODO
+# Double Q learning (rather than the simple Q learning you're doing here)
+# AlphaGo setup
 
 # For MCTS, no need to expand all the nodes. Initialize them all
 # with their hueristic values, and go from there
@@ -708,7 +380,5 @@ end
 
 # Fun:
 # Add GUI for human player 
-
-include("tests.jl")
 
 end # module MCTS
