@@ -1,6 +1,6 @@
 
 function test()
-  Random.seed!(1234)
+  # Random.seed!(1234)
 
   # Can win in 1 steps
   st1 = State(1, SVector{2}([

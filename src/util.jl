@@ -32,6 +32,9 @@ function foldmap(f, agg, init, args...; exclude=Functors.isleaf)
     fmap(w, nothing, args...)
 end
 
+newEnd(x::AbstractArray) = reshape(x, (size(x)...,1))
+new1(x::AbstractArray) = reshape(x, (1, size(x)...))
+
 const na = @SVector [CartesianIndex()]
 
 const indent_level = Ref(0)

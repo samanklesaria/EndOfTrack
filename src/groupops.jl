@@ -58,11 +58,11 @@ function normalized(st)
   end
   
   # # Flip the board left or right
-  # st2 = fmap(flip_pos_vert, st)
-  # if hash(st2) > hash(st)
-  #   st = st2
-  #   push!(action_map, FlipVert())
-  # end
+  st2 = fmap(flip_pos_vert, st)
+  if hash(st2) > hash(st)
+    st = st2
+    push!(action_map, FlipVert())
+  end
   
   # Sort tokens of each player
   # ixs = fmapstructure(a->sortperm(nestedview(a)), st; exclude=ismat)

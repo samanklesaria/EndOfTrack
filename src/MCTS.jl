@@ -9,7 +9,7 @@ using ThreadTools
 using StatsBase
 using LogExpFunctions
 using Unrolled
-using AccessorsExtra
+using DataStructures
 
 using Plots
 using StatsBase: mean
@@ -99,14 +99,16 @@ function apply_action(st::State, va::ValuedAction)
   new_st
 end
 
-function unchecked_apply_action(st::State, a::Action)::State
-  if a[1] < 6
-    pieces = st.positions[st.player].pieces
-    pmat = MMatrix{2,5}(pieces) 
-    pmat[:, a[1]] .= a[2]
-    @set st.positions[st.player].pieces = SMatrix{2,5}(pmat)
+# TODO: convert to MMatrix, set values, then convert back.
+# But have this be type stable
+function unchecked_apply_action(st::State, (pieceix, pos)::Action)::State
+  if pieceix < 6
+    pieces = (st.positions[st.player].pieces)::SMatrix{2, 5, Int8}
+    ix = LinearIndices(pieces)
+    pmat = setindex(setindex(pieces, pos[1], ix[1, pieceix]), pos[2], ix[2, pieceix])
+    @set st.positions[st.player].pieces = pmat
   else
-    @set st.positions[st.player].ball = a[2]
+    @set st.positions[st.player].ball = pos
   end
 end
 
@@ -172,13 +174,10 @@ struct BackEdge
   state::State
   trans::Transformation
 end
-@functor BackEdge (state,)
 
-Base.hash(a::BackEdge, h::UInt) = foldmap(identity, flip(hash), h, a)
+Base.hash(a::BackEdge, h::UInt) = hash(a.state, h)
 
-Base.:(==)(a::BackEdge, b::BackEdge) = foldmap(&, true, a, b) do a, b
-  all(a .== b)
-end
+Base.:(==)(a::BackEdge, b::BackEdge) = a.state == b.state
 
 mutable struct Node
   last_access::Int
@@ -256,36 +255,21 @@ function expand_leaf!(mcts, nst::State)
   end
 end
 
-# It also seems like batching backprop might be useful.
-# Many of your paths will go through the same node, so
-# rather than doing them individually, do them all at once.
-# Instead of a queue, you'll need to use a hashtable. 
-
-
-# But also: what's really taking so much time?
-# How long are the backprop steps? What's the branching factor?
-
-
-
-# It seems like this is taking a very long time. 
-# Why? are there loops in the back-edges?
-# Doing gc would help matters, so there's less parents to follow.
-
 function backprop(mcts::MC, st::State, q::Float32, n::Int)
-  node = mcts.cache[st]
-  to_process = Dict([p=>(q,node) for p in node.parents])
+  to_process = DefaultDict{State, Float32}(0f0)
+  to_process[st] = q
   while length(to_process) > 0
-    (b, (q, child)) = pop!(to_process)
-    if !haskey(mcts.cache, b.state)
-      delete!(child.parents, b.state)
-    else
-      node = mcts.cache[b.state]
-      edge = node.edges[b.ix]
-      trans_q = b.trans.value_map * q
-      edge.q += trans_q
-      edge.n += n
-      for p in node.parents
-        to_process[p] = (discount * trans_q, node)
+    (st, q) = pop!(to_process)
+    node = mcts.cache[st]
+    for p in node.parents 
+      if !haskey(mcts.cache, p.state)
+        delete!(node.parents, p.state)
+      else 
+        newq = discount * p.trans.value_map * q
+        edge = mcts.cache[p.state].edges[p.ix]
+        edge.n += n
+        edge.q += newq
+        to_process[p.state] += newq
       end
     end
   end
@@ -298,7 +282,7 @@ function rollout(st::State, a::ValuedAction)
   # printindent("Starting Rollout of ")
   # log_action(st, a)
   next_st = @set apply_action(st, a).player = 2
-  endst = simulate(next_st, greedy_players; steps=10)
+  endst = simulate(next_st, greedy_players; steps=30)
   if isnothing(endst.winner)
     endq = 0f0
   elseif endst.winner == 1
@@ -318,9 +302,7 @@ function (mcts::MC)(st::State)
   for _ in 1:mcts.steps
     expand_leaf!(mcts, nst)
   end
-  if true # length(mcts.cache) > mcts.cache_lim
-    gc!(mcts)
-  end
+  gc!(mcts)
   edges = mcts.cache[nst].edges
   # println("Options:")
   # indent!()
@@ -355,13 +337,9 @@ function mc_game_lengths()
 end
 
 function blah()
-  Random.seed!(1234)
-  simulate(start_state, (MC(steps=20), AlphaBeta(3)); steps=300, log=true)
+  simulate(start_state, (MC(steps=50), AlphaBeta(3)); steps=300, log=true)
 end
 
-
-# Learned:
-# 'occupied' is super slow thanks to the functors. Rewrite without them. 
 
 # Potential things:
 # The GC could prune earler, by removing everything not touched by the chosen action
@@ -382,12 +360,8 @@ end
 
 # Optimizations:
 # Encode and use bitvec instead of Dict for ball passing
-# Make simulate know the types of the players (by unrolling the loop and using tuples)
 # Disable bounds checks
 # Do stuff in parallel (and benchmark it)
-# Benchmark
-# Look at tools for type stability warnings in Julia
-# Instead of na, make a better 'newaxis function
 
 # Fun:
 # Add GUI for human player 

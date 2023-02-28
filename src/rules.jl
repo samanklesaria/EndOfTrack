@@ -14,6 +14,12 @@ struct State
 end
 @functor State (positions,)
 
+# Base.:(==)(a::State, b::State) = foldmap(&, true, a, b) do a, b
+#   all(a .== b)
+# end
+
+# Base.hash(a::State, u::UInt) = foldmap(identity, flip(hash), h, a)
+
 const start_state = State(1, 
   SVector{2}([
     PlayerState(
@@ -78,7 +84,7 @@ end
 function ball_actions(st::State)
   y = st.positions[st.player].ball
   passes = Set{Pos}([y])
-  balls = [y]
+  balls = Pos[y]
   while length(balls) > 0
     x = pop!(balls)
     for move in pass_actions(st, x)
@@ -90,7 +96,7 @@ function ball_actions(st::State)
     end
   end
   pop!(passes, y)
-  [(UInt8(6), p) for p in passes]
+  Action[(UInt8(6), p) for p in passes]
 end
 
 next_player(player::Int) = (1 ⊻ (player - 1)) + 1
@@ -120,30 +126,30 @@ function pass_actions(st::State, x::Pos)
   end
   moves = Dict{Dir, PotentialMove}()
   for player in (st.player, next_player(st.player))
-    vecs = st.positions[player].pieces .- x[:, na]
-    absvecs = abs.(vecs)
-    diagonals = absvecs[1, :] .== absvecs[2, :]
+    vecs = (st.positions[player].pieces .- x[:, na])::SMatrix{2, 5, Int8}
+    absvecs = abs.(vecs)::SMatrix{2, 5, Int8}
+    diagonals = (absvecs[1, :] .== absvecs[2, :])::SVector{5, Bool}
     verticals = vecs[1, :] .== 0
     horizontals = vecs[1, :] .== 0
-    norms = maximum(absvecs; dims=1)[1, :]
-    nz = norms .> 0
-    valid = (diagonals .| verticals .| horizontals) .& nz
-    norms = norms[valid]
-    units = vecs[:, valid] .÷ norms[na, :]
-    y = st.positions[player].pieces[:, valid]
+    norms = maximum(absvecs; dims=1)[1, :]::SVector{5, Int8}
+    nz = (norms .> 0)::SVector{5, Bool}
+    valid = ((diagonals .| verticals .| horizontals) .& nz)::SVector{5, Bool}
+    normsv = norms[valid]::Vector{Int8}
+    units = (vecs[:, valid] .÷ normsv[na, :])::Matrix{Int8}
+    y = (st.positions[player].pieces[:, valid])::Matrix{Int8}
     if player == st.player
       for i in 1:size(units, 2)
         u = SVector{2}(units[:, i])
         if haskey(moves, u)
-          moves[u] = lub(moves[u], PotentialMove(y[:,i], norms[i]))
+          moves[u] = lub(moves[u], PotentialMove(y[:,i], normsv[i]))
         else
-          moves[u] = PotentialMove(y[:,i], norms[i])
+          moves[u] = PotentialMove(y[:,i], normsv[i])
         end
       end
     else
       for i in 1:size(units, 2)
         u = SVector{2}(units[:, i])
-        if haskey(moves, u) && norms[i] < moves[u].norm
+        if haskey(moves, u) && normsv[i] < moves[u].norm
           pop!(moves, u)
         end
       end
