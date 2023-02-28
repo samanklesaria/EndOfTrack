@@ -9,6 +9,7 @@ using ThreadTools
 using StatsBase
 using LogExpFunctions
 using Unrolled
+using AccessorsExtra
 
 using Plots
 using StatsBase: mean
@@ -16,7 +17,7 @@ using StatsBase: mean
 export test, ab_game_lengths, simulate, start_state, Rand,
   AlphaBeta
 
-const VALIDATE=true;
+const VALIDATE=false;
 
 include("rules.jl")
 include("util.jl")
@@ -27,19 +28,20 @@ include("tests.jl")
 const discount = 0.99f0
 const inv_discount = 1/discount
 
-function actions(st)
-  [apply_hueristic(st, a) for a in Iterators.flatten(
-    (piece_actions(st), ball_actions(st)))]
+function actions(st::State)::Vector{ValuedAction}
+  acts = piece_actions(st)
+  append!(acts, ball_actions(st))
+  ValuedAction[apply_hueristic(st, a) for a in acts]
 end
 
 function ordered_actions(st)
   sort(actions(st); by=a-> abs(a.value), rev=true) 
 end
 
-function apply_hueristic(st, a)
+function apply_hueristic(st::State, a::Action)::ValuedAction
   term = is_terminal(unchecked_apply_action(st, a))
   if !term
-    return ValuedAction(a, 0)
+    return ValuedAction(a, 0f0)
   else
     return ValuedAction(a, st.player == 1 ? 1 : -1)
   end
@@ -97,7 +99,7 @@ function apply_action(st::State, va::ValuedAction)
   new_st
 end
 
-function unchecked_apply_action(st::State, a::Action)
+function unchecked_apply_action(st::State, a::Action)::State
   if a[1] < 6
     pieces = st.positions[st.player].pieces
     pmat = MMatrix{2,5}(pieces) 
@@ -170,6 +172,13 @@ struct BackEdge
   state::State
   trans::Transformation
 end
+@functor BackEdge (state,)
+
+Base.hash(a::BackEdge, h::UInt) = foldmap(identity, flip(hash), h, a)
+
+Base.:(==)(a::BackEdge, b::BackEdge) = foldmap(&, true, a, b) do a, b
+  all(a .== b)
+end
 
 mutable struct Node
   last_access::Int
@@ -188,7 +197,6 @@ Base.@kwdef mutable struct MC
   steps::Int = 100
 end
 
-# TODO: need to invalidate parent pointers too
 function gc!(mc::MC)
   to_delete = Vector{State}()
   for (k,v) in mc.cache
@@ -205,10 +213,6 @@ end
 
 # In a multi-threaded context, can use relativistic time: (thread, time) tuple. 
 
-# Why is it only 0.93 for a move to (4,8)?
-# We should have it hard coded to always prefer moves that end the game
-
-
 # TODO: The first time the parent size goes above 1, pause to check that
 # this makes sense. 
 
@@ -224,6 +228,9 @@ function expand_leaf!(mcts, nst::State)
       c.last_access = mcts.time
       if !isnothing(parent_key)
         push!(c.parents, parent_key)
+        if length(c.parents) > 8
+        println("Got $(length(c.parents)) parents")
+        end
       end
       ix = argmax([ucb(c.counts, e) for e in c.edges])
       # print("Traversing Edge ")
@@ -238,7 +245,7 @@ function expand_leaf!(mcts, nst::State)
     else
       # println("Expanding Leaf")
       # indent!()
-      edges = [rollout(nst, a) for a in actions(nst)]
+      edges = Edge[rollout(nst, a) for a in actions(nst)]
       # dedent!()
       total_q = sum(e.q for e in edges)
       parents = isnothing(parent_key) ? Set{BackEdge}() : Set([parent_key])
@@ -266,22 +273,20 @@ end
 
 function backprop(mcts::MC, st::State, q::Float32, n::Int)
   node = mcts.cache[st]
-  to_process = [(p,q,node) for p in node.parents]
+  to_process = Dict([p=>(q,node) for p in node.parents])
   while length(to_process) > 0
-    b, q, child = pop!(to_process)
+    (b, (q, child)) = pop!(to_process)
     if !haskey(mcts.cache, b.state)
       delete!(child.parents, b.state)
-    end
-    node = mcts.cache[b.state]
-    edge = node.edges[b.ix]
-    trans_q = b.trans.value_map * q
-    edge.q += trans_q
-    edge.n += n
-    # if length(node.parents) > 9
-    #   println("Parent size ", length(node.parents))
-    # end
-    for p in node.parents
-      push!(to_process, (p, discount * trans_q, node))
+    else
+      node = mcts.cache[b.state]
+      edge = node.edges[b.ix]
+      trans_q = b.trans.value_map * q
+      edge.q += trans_q
+      edge.n += n
+      for p in node.parents
+        to_process[p] = (discount * trans_q, node)
+      end
     end
   end
 end
@@ -350,8 +355,13 @@ function mc_game_lengths()
 end
 
 function blah()
+  Random.seed!(1234)
   simulate(start_state, (MC(steps=20), AlphaBeta(3)); steps=300, log=true)
 end
+
+
+# Learned:
+# 'occupied' is super slow thanks to the functors. Rewrite without them. 
 
 # Potential things:
 # The GC could prune earler, by removing everything not touched by the chosen action
@@ -377,6 +387,7 @@ end
 # Do stuff in parallel (and benchmark it)
 # Benchmark
 # Look at tools for type stability warnings in Julia
+# Instead of na, make a better 'newaxis function
 
 # Fun:
 # Add GUI for human player 

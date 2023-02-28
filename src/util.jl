@@ -6,18 +6,30 @@ mutable struct FoldMap{A, F, G, T} <: Functors.AbstractWalk
     output::T
 end
 
-function (walk::FoldMap)(recurse, x)
-    if walk.exclude(x)
-        walk.output = walk.agg_fn(walk.output, walk.map_fn(x))
+broadcast_to(x, y) = fill(y, length(x))
+
+function children_like(y, x)
+    if Functors.isleaf(y)
+        broadcast_to(x, y)
     else
-        foreach(recurse, Functors.children(x))
+        Functors.functor(typeof(x), y)[1]
+    end
+end
+
+function (walk::FoldMap)(recurse, x, ys...)
+    if walk.exclude(x)
+        walk.output = walk.agg_fn(walk.output, walk.map_fn(x, ys...))
+    else
+        func, re = Functors.functor(x)
+        yfuncs = map(y -> children_like(y, x), ys)
+        foreach(recurse, func, yfuncs...)
     end
     return walk.output
 end
 
 function foldmap(f, agg, init, args...; exclude=Functors.isleaf)
     w = FoldMap(f, agg, exclude, init)
-    fmap(w, identity, args...)
+    fmap(w, nothing, args...)
 end
 
 const na = @SVector [CartesianIndex()]
@@ -56,3 +68,5 @@ function plot_state(st::State)
     st.positions[2].pieces[2, :])
   scatter!(st.positions[2].ball[1:1], st.positions[2].ball[2:2])
 end
+
+flip(f) = (a,b)-> f(b,a)

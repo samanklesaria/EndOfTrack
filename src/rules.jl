@@ -29,10 +29,10 @@ function is_terminal(state)
   state.positions[1].ball[2] == limits[2] || state.positions[2].ball[2] == 1
 end
 
-function occupied(state, y)
-  inner(p::SMatrix) = any(all(p .== y[:, na]; dims=1))
-  inner(_) = false
-  foldmap(inner, Base.:|, false, state)
+function occupied(state::State, y)
+  mapreduce(|, state.positions) do ps
+    any(encode(ps.pieces) .== encode(y))
+  end
 end
 
 struct PotentialMove
