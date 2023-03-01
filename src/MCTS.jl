@@ -24,15 +24,18 @@ include("util.jl")
 include("searches.jl")
 include("groupops.jl")
 include("tests.jl")
+include("nn.jl")
 
 const discount = 0.99f0
 const inv_discount = 1/discount
 
-function actions(st::State)::Vector{ValuedAction}
+function actions(st::State)::Vector{Action}
   acts = piece_actions(st)
   append!(acts, ball_actions(st))
-  ValuedAction[apply_hueristic(st, a) for a in acts]
+  acts
 end
+
+# ValuedAction[apply_hueristic(st, a) for a in acts]
 
 function ordered_actions(st)
   sort(actions(st); by=a-> abs(a.value), rev=true) 
@@ -192,7 +195,6 @@ Base.@kwdef mutable struct MC
   time::Int = 0
   last_move_time::Int = 0
   cache::Dict{State, Node} = Dict{State, Node}()
-  cache_lim::Int = 100
   steps::Int = 100
 end
 
@@ -207,13 +209,6 @@ function gc!(mc::MC)
     delete!(mc.cache, k)
   end
 end
-
-# ALSO: What if we just did the simple AlphaGo heuristic instead?
-
-# In a multi-threaded context, can use relativistic time: (thread, time) tuple. 
-
-# TODO: The first time the parent size goes above 1, pause to check that
-# this makes sense. 
 
 function expand_leaf!(mcts, nst::State)
   parent_key = nothing
@@ -351,9 +346,6 @@ end
 # TODO
 # Double Q learning (rather than the simple Q learning you're doing here)
 # AlphaGo setup
-
-# For MCTS, no need to expand all the nodes. Initialize them all
-# with their hueristic values, and go from there
 
 # Hueristics:
 # Position of the ball? Highest player position?
