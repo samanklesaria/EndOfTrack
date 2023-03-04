@@ -1,20 +1,15 @@
 module MCTS
+using BSON: @save
+using Lux, NNlib, Zygote, Optimisers, Functors, StatsBase, DataStructures
+using StaticArrays, Accessors, Random, ArraysOfArrays, Unrolled
 using Infiltrator 
-using StaticArrays
-using Accessors
-using Random
-using Functors
-using ArraysOfArrays
 using ThreadTools
-using StatsBase
-using LogExpFunctions
-using Unrolled
-using DataStructures
+using VisdomLog
 
 using Plots
 using StatsBase: mean
 
-export test, ab_game_lengths, simulate, start_state, Rand,
+export test, simulate, start_state, Rand,
   AlphaBeta
 
 const VALIDATE=false;
@@ -29,56 +24,18 @@ include("nn.jl")
 const discount = 0.99f0
 const inv_discount = 1/discount
 
-function actions(st::State)::Vector{Action}
-  acts = piece_actions(st)
-  append!(acts, ball_actions(st))
-  acts
-end
-
-# ValuedAction[apply_hueristic(st, a) for a in acts]
-
-function ordered_actions(st)
-  sort(actions(st); by=a-> abs(a.value), rev=true) 
-end
-
-function apply_hueristic(st::State, a::Action)::ValuedAction
-  term = is_terminal(unchecked_apply_action(st, a))
-  if !term
-    return ValuedAction(a, 0f0)
-  else
-    return ValuedAction(a, st.player == 1 ? 1 : -1)
-  end
-end
-
-function shuffled_actions(st)
-  acts = actions(st)
-  Random.shuffle!(acts)
-  sort(acts; by=a-> abs.(a.value), rev= true, alg=MergeSort) 
-end
-
-struct Rand end
-
-function (::Rand)(st::State)
-  choices = actions(st)
-  choices[rand(1:length(choices))]
-end
-
-struct Boltzmann
+mutable struct Neural{NN, P, S}
+  net::NN
+  ps::P
+  st::S
   temp::Float32
-end
-
-function (b::Boltzmann)(st::State)
-  choices = actions(st)
-  player = st.player == 1 ? 1 : -1
-  probs = [player .* c.value ./ b.temp for c in choices]
-  softmax!(probs)
-  sample(choices, Weights(probs))
 end
 
 struct Greedy end
 
 function (b::Greedy)(st::State)
-  choices = actions(st)
+  acts = actions(st)
+  choices = ValuedAction[apply_hueristic(st, a) for a in acts]
   player = st.player == 1 ? 1 : -1
   probs = [player * c.value for c in choices]
   ix = argmax(probs)
@@ -86,25 +43,22 @@ function (b::Greedy)(st::State)
   rand(choices[mask])
 end
 
-apply_action(st::State, a::Action) = unchecked_apply_action(st, a)
+const greedy_players = (Greedy(), Greedy())
 
-function apply_action(st::State, va::ValuedAction)
-  new_st = unchecked_apply_action(st, va.action)
-  if VALIDATE
-    try
-      assert_valid_state(new_st)
-    catch exc
-      println(st)
-      log_action(st, va)
-      rethrow() 
-    end
-  end
-  new_st
+function (b::Neural)(st::State)
+  choices = actions(st)
+  batch = cat(as_pic.(apply_action.(st, choices)); dims=4)
+  player = st.player == 1 ? 1 : -1
+  values, _ = Lux.apply(b.net, batch, b.ps, b.st)
+  normalized_values = player .* values .* b.temp
+  softmax!(normalized_values)
+  ix = sample(1:length(choices), Weights(normalized_values))
+  ValuedAction(choices[ix], values[ix])
 end
 
-# TODO: convert to MMatrix, set values, then convert back.
-# But have this be type stable
-function unchecked_apply_action(st::State, (pieceix, pos)::Action)::State
+apply_action(st::State, a::ValuedAction) = apply_action(st, a.action)
+
+function apply_action(st::State, (pieceix, pos)::Action)
   if pieceix < 6
     pieces = (st.positions[st.player].pieces)::SMatrix{2, 5, Int8}
     ix = LinearIndices(pieces)
@@ -119,49 +73,33 @@ struct EndState
   winner::Union{Int8, Nothing}
   st::State
   steps::Int
+  states::Vector{State}
 end
 
-# function simulate(st::State, players; steps=300, log=false)
-#   # if log
-#   #   println("Simulating on thread $(Threads.threadid())")
-#   # end
-#   for nsteps in 0:steps
-#     if is_terminal(st)
-#       return EndState(next_player(st.player), st, nsteps)
-#     end
-#     action = players[st.player](st)
-#     if log
-#       log_action(st, action)
-#     end
-#     st = apply_action(st, action)
-#     st = @set st.player = next_player(st.player) 
-#   end
-#   return EndState(nothing, st, steps)
-# end
-
-function simulate(st::State, players; steps=300, log=false)
+function simulate(st::State, players; steps=300, log=false, track=false)
   player_ixs = st.player == 1 ? (0=>1,1=>2) : (0=>2,1=>1)
-  if log
-    println("Simulating on thread $(Threads.threadid())")
-  end
-  simulate_(st, players, player_ixs, steps, log)
+  simulate_(st, players, player_ixs, steps, log, track)
 end
 
-@unroll function simulate_(st::State, players, player_ixs, steps, log)
+@unroll function simulate_(st::State, players, player_ixs, steps, log, track)
+  states = Vector{State}()
   for nsteps in 0:steps
     @unroll for (substep, player) in player_ixs
       st = @set st.player = player
       if is_terminal(st)
-        return EndState(next_player(player), st, 2 * nsteps + substep)
+        return EndState(next_player(player), st, 2 * nsteps + substep, states)
       end
       action = players[player](st)
       if log
         log_action(st, action)
       end
       st = apply_action(st, action)
+      if track
+        push!(states, st)
+      end
     end
   end
-  return EndState(nothing, st, steps)
+  return EndState(nothing, st, steps, states)
 end
 
 mutable struct Edge
@@ -170,7 +108,7 @@ mutable struct Edge
   n::Int
 end
 
-ValuedAction(e::Edge) = ValuedAction(e.action, e.q / e.n)
+ValuedAction(e::Edge) = ValuedAction(e.action, e.q)
 
 struct BackEdge
   ix::Int8
@@ -189,9 +127,10 @@ mutable struct Node
   parents::Set{BackEdge}
 end
 
-ucb(n::Int, e::Edge) = (e.q / e.n) + sqrt(2) * sqrt(log(n) / e.n)
+ucb(n::Int, e::Edge) = e.q + sqrt(2) * sqrt(log(n) / e.n)
 
-Base.@kwdef mutable struct MC
+Base.@kwdef mutable struct MC{P}
+  players::P
   time::Int = 0
   last_move_time::Int = 0
   cache::Dict{State, Node} = Dict{State, Node}()
@@ -222,9 +161,6 @@ function expand_leaf!(mcts, nst::State)
       c.last_access = mcts.time
       if !isnothing(parent_key)
         push!(c.parents, parent_key)
-        if length(c.parents) > 8
-        println("Got $(length(c.parents)) parents")
-        end
       end
       ix = argmax([ucb(c.counts, e) for e in c.edges])
       # print("Traversing Edge ")
@@ -239,12 +175,12 @@ function expand_leaf!(mcts, nst::State)
     else
       # println("Expanding Leaf")
       # indent!()
-      edges = Edge[rollout(nst, a) for a in actions(nst)]
+      edges = Edge[rollout(nst, a, mcts.players) for a in actions(nst)]
       # dedent!()
-      total_q = sum(e.q for e in edges)
+      max_q = maximum(e.q for e in edges)
       parents = isnothing(parent_key) ? Set{BackEdge}() : Set([parent_key])
       mcts.cache[nst] = Node(mcts.time, 1, edges, parents)
-      backprop(mcts, nst, discount * total_q, length(edges))
+      backprop(mcts, nst, discount * max_q, length(edges))
       return
     end
   end
@@ -263,21 +199,18 @@ function backprop(mcts::MC, st::State, q::Float32, n::Int)
         newq = discount * p.trans.value_map * q
         edge = mcts.cache[p.state].edges[p.ix]
         edge.n += n
-        edge.q += newq
-        to_process[p.state] += newq
+        edge.q = max(edge.q, newq)
+        to_process[p.state] = max(to_process[p.state], newq)
       end
     end
   end
 end
 
-const rand_players = (Rand(), Rand())
-const greedy_players = (Greedy(), Greedy())
-
-function rollout(st::State, a::ValuedAction)
+function rollout(st::State, a::Action, players)
   # printindent("Starting Rollout of ")
   # log_action(st, a)
   next_st = @set apply_action(st, a).player = 2
-  endst = simulate(next_st, greedy_players; steps=30)
+  endst = simulate(next_st, players; steps=20)
   if isnothing(endst.winner)
     endq = 0f0
   elseif endst.winner == 1
@@ -287,8 +220,8 @@ function rollout(st::State, a::ValuedAction)
   end
   q = (discount ^ endst.steps) * endq
   # printindent("$(endst.steps) step rollout: ")
-  # log_action(st, ValuedAction(a.action, q))
-  Edge(a.action, q, 1)
+  # log_action(st, ValuedAction(a, q))
+  Edge(a, q, 1)
 end
 
 function (mcts::MC)(st::State)
@@ -306,34 +239,34 @@ function (mcts::MC)(st::State)
   #   log_action(st, ValuedAction(e))
   # end
   # dedent!()
-  trans(ValuedAction(edges[argmax([e.q / e.n for e in edges])]))
+  trans(ValuedAction(edges[argmax([e.q for e in edges])]))
 end
 
-function rand_game_lengths()
-  results = tmap(_->simulate(start_state, rand_players), 8, 1:10)
-  println("$(sum(isnothing(r.winner) for r in results) / 10) were nothing")
-  histogram([r.steps for r in results if !isnothing(r.winner)])
-end
+# function rand_game_lengths()
+#   results = tmap(_->simulate(start_state, rand_players), 8, 1:10)
+#   println("$(sum(isnothing(r.winner) for r in results) / 10) were nothing")
+#   histogram([r.steps for r in results if !isnothing(r.winner)])
+# end
 
-function ab_game_lengths()
-  results = tmap(_->simulate(start_state, (AlphaBeta(3), Rand())), 8, 1:10)
-  println("$(sum(isnothing(r.winner) for r in results) / 10) were nothing")
-  win_avg = mean([r.winner for r in results if !isnothing(r.winner)])
-  println("Average winner was $win_avg") 
-  histogram([r.steps for r in results if !isnothing(r.winner)])
-end
+# function ab_game_lengths()
+#   results = tmap(_->simulate(start_state, (AlphaBeta(3), Rand())), 8, 1:10)
+#   println("$(sum(isnothing(r.winner) for r in results) / 10) were nothing")
+#   win_avg = mean([r.winner for r in results if !isnothing(r.winner)])
+#   println("Average winner was $win_avg") 
+#   histogram([r.steps for r in results if !isnothing(r.winner)])
+# end
 
-function mc_game_lengths()
-  results = tmap(_->simulate(start_state, (MC(), Rand()); steps=300), 8, 1:10)
-  println("$(sum(isnothing(r.winner) for r in results) / 10) were nothing")
-  win_avg = mean([r.winner for r in results if !isnothing(r.winner)])
-  println("Average winner was $win_avg") 
-  histogram([r.steps for r in results if !isnothing(r.winner)])
-end
+# function mc_game_lengths()
+#   results = tmap(_->simulate(start_state, (MC(), Rand()); steps=300), 8, 1:10)
+#   println("$(sum(isnothing(r.winner) for r in results) / 10) were nothing")
+#   win_avg = mean([r.winner for r in results if !isnothing(r.winner)])
+#   println("Average winner was $win_avg") 
+#   histogram([r.steps for r in results if !isnothing(r.winner)])
+# end
 
-function blah()
-  simulate(start_state, (MC(steps=50), AlphaBeta(3)); steps=300, log=true)
-end
+# function blah()
+#   simulate(start_state, (MC(steps=50), AlphaBeta(3)); steps=300, log=true)
+# end
 
 
 # Potential things:

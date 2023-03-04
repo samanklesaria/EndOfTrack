@@ -158,9 +158,13 @@ function pass_actions(st::State, x::Pos)
   values(moves)
 end
 
-struct ValuedAction
-  action::Union{Action, Nothing}
-  value::Float32
+function actions(st::State)::Vector{Action}
+  acts = piece_actions(st)
+  append!(acts, ball_actions(st))
+  acts
 end
 
-Base.:*(a::Number, b::ValuedAction) = ValuedAction(b.action, a * b.value)
+struct ValuedAction
+  action::Action
+  value::Float32
+end

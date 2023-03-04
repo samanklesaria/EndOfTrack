@@ -1,6 +1,9 @@
+Base.:*(a::Number, b::ValuedAction) = ValuedAction(b.action, a * b.value)
+
 const eps = 1e-3
-const no_min_action = ValuedAction(nothing, 1 + eps)
-const no_max_action = ValuedAction(nothing, -1 - eps)
+const fake_action = (0, @SVector zeros(2))
+const no_min_action = ValuedAction(fake_action, 1 + eps)
+const no_max_action = ValuedAction(fake_action, -1 - eps)
 
 function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth)
   if depth == 0
@@ -68,7 +71,7 @@ larger_q(a, b) = a.value > b.value ? a : b
 function cached_max_action(st::State, depth::Int, cache::Dict)
   trans, nst = normalized(st)
   if is_terminal(nst)
-    trans(ValuedAction(nothing, -1))
+    trans(ValuedAction(fake_action, -1))
   elseif haskey(cache, nst)
     trans(cache[nst])
   elseif depth == 0
@@ -94,3 +97,39 @@ function (mm::CachedMinimax)(st::State)
   cached_max_action(st, mm.depth, cache)
 end
 
+function apply_hueristic(st::State, a::Action)::ValuedAction
+  term = is_terminal(apply_action(st, a))
+  if !term
+    return ValuedAction(a, 0f0)
+  else
+    return ValuedAction(a, st.player == 1 ? 1 : -1)
+  end
+end
+
+function shuffled_actions(st)
+  acts = actions(st)
+  Random.shuffle!(acts)
+  vacts = ValuedAction[apply_hueristic(st, a) for a in acts]
+  sort(vacts; by=a-> abs.(a.value), rev= true, alg=MergeSort) 
+end
+
+struct Rand end
+
+const rand_players = (Rand(), Rand())
+
+function (::Rand)(st::State)
+  choices = actions(st)
+  ValuedAction(choices[rand(1:length(choices))], 0f0)
+end
+
+# struct Boltzmann
+#   temp::Float32
+# end
+
+# function (b::Boltzmann)(st::State)
+#   choices = actions(st)
+#   player = st.player == 1 ? 1 : -1
+#   probs = [player .* c.value ./ b.temp for c in choices]
+#   softmax!(probs)
+#   sample(choices, Weights(probs))
+# end

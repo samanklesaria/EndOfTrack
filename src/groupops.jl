@@ -90,5 +90,4 @@ function (t::Transformation)(a::ValuedAction)
 end
 
 (t::Transformation)(a::Action) = foldr(group_op, t.action_map; init=a)
-(t::Transformation)(::Nothing) = nothing
 
