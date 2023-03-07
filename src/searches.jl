@@ -122,6 +122,22 @@ function (::Rand)(st::State)
   ValuedAction(choices[rand(1:length(choices))], 0f0)
 end
 
+struct Greedy end
+
+function (b::Greedy)(st::State)
+  acts = actions(st)
+  choices = ValuedAction[apply_hueristic(st, a) for a in acts]
+  player = st.player == 1 ? 1 : -1
+  probs = [player * c.value for c in choices]
+  ix = argmax(probs)
+  mask = (probs .== probs[ix])
+  rand(choices[mask])
+end
+
+const greedy_players = (Greedy(), Greedy())
+
+
+
 # struct Boltzmann
 #   temp::Float32
 # end

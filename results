@@ -1,0 +1,14 @@
+50 game average winners
+
+Rand vs AlphaBeta(3): 2
+AlphaBeta(2) vs AlphaBeta(3): 1.84
+AlphaBeta(3) vs AlphaBeta(4): 1.90
+AlphaBeta(2) vs AlphaBeta(4): 2.0
+AlphaBeta(2) vs Rand(): 1.0
+AlphaBeta(4) vs AlphaBeta(4): 1.49 (so there's basically no first player advantage)
+AlphaBeta(2) vs AlphaBeta(2): 1.46
+AlphaBeta(1) vs AlphaBeta(2): 1.88
+AlphaBeta(1) vs AlphaBeta(3): 1.94
+AlphaBeta(1) vs AlphaBeta(4): 2.0
+AlphaBeta(1) vs Rand(): 1.14
+

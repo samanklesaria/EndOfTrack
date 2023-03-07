@@ -19,8 +19,30 @@ function make_net()
     FlattenLayer(),
     Dense(64, 1, tanh)])
   rng = Random.default_rng()
-  ps, st = Lux.setup(rng, net)
-  (;net, st), ps
+  cpu_ps, st = Lux.setup(rng, net)
+  if isfile("checkpoint.bson")
+    @load "checkpoint.bson" cpu_ps
+    println("Loaded weights")
+  end
+  (;net, st), cpu_ps
+end
+
+mutable struct Neural{NN, P, S}
+  net::NN
+  ps::P
+  st::S
+  temp::Float32
+end
+
+function (b::Neural)(st::State)
+  choices = actions(st)
+  batch = cat4(as_pic.(apply_action.(Ref(st), choices)))
+  player = st.player == 1 ? 1 : -1
+  values, _ = Lux.apply(b.net, batch, b.ps, b.st)
+  normalized_values = player .* values[1,:] .* b.temp
+  softmax!(normalized_values)
+  ix = sample(1:length(choices), Weights(normalized_values))
+  ValuedAction(choices[ix], values[ix])
 end
 
 struct GameResult
@@ -28,11 +50,13 @@ struct GameResult
   states::Vector{State}
 end
 
+cat4(stack) = reduce((x,y)->cat(x,y; dims=4), stack)
+
 function as_pics(game::GameResult)
   multipliers = [1; cumprod(fill(discount, length(game.states) - 1))]
   reverse!(multipliers)
   stack = as_pic.(game.states)
-  reduce((x,y)->cat(x,y; dims=4), stack), multipliers
+  cat4(stack), multipliers
 end
 
 function test_net()
@@ -43,42 +67,41 @@ function test_net()
   pics, values = gpu.(as_pics(gameres))
   loss, grad = withgradient(ps) do ps
     q_pred, _ = Lux.apply(cfg.net, pics, ps, cfg.st)
-    mean(abs2.(q_pred .- values))
+    mean(abs2.(q_pred[1,:] .- values))
   end
   loss
 end
 
 function trainer(cfg, cpu_ps, game_chan, param_chan)
   ps = gpu(cpu_ps) 
-  st_opt = Optimisers.setup(Optimisers.ADAM(1f-3), ps)
-  vd=Visdom("mcts_greedy")
+  st_opt = Optimisers.setup(Optimisers.ADAM(1f-4), ps)
+  vd=Visdom("mcts_neural")
   running_loss = 0f0
   for (ix, game) in enumerate(game_chan)
-    println("Got game")
     pics, values = gpu.(as_pics(game))
     loss, grad = withgradient(ps) do ps
       q_pred, _ = Lux.apply(cfg.net, pics, ps, cfg.st)
       mean(abs2.(q_pred .- values))
     end
     running_loss = 0.1f0 * running_loss + 0.9f0 * loss
-    st_opt, ps = Optimisers.update(st_opt, ps, grad[1])
-    # take!(param_chan)
-    # put!(param_chan, ps)
+    st_opt, ps = Optimisers.update!(st_opt, ps, grad[1])
+    take!(param_chan)
+    put!(param_chan, cpu(ps))
     report(vd, "loss", ix, running_loss)
     if ix % 20 == 19
       cpu_ps = cpu(ps)
-      @save "greedy-checkpoint.bson" cpu_ps
+      @save "neural-checkpoint.bson" cpu_ps
+      println("Saved")
     end
-    println("Done updating")
+    println("Loss ", loss)
   end 
 end
 
 function player(cfg, game_chan, param_chan)
   while true
-    # params = fetch(param_chan)
-    # neural_player = Neural(cfg.net, params, cfg.st, 50.0)
-    # rollout_players = (neural_player, neural_player)
-    rollout_players = greedy_players
+    params = fetch(param_chan)
+    neural_player = Neural(cfg.net, params, cfg.st, 50f0)
+    rollout_players = (neural_player, neural_player)
     mc = MC(players=rollout_players, steps=20)
     players = (mc, mc)
     result = simulate(start_state, players; track=true) 
@@ -95,23 +118,16 @@ function player(cfg, game_chan, param_chan)
 end
 
 function train_loop()
+  N = Threads.nthreads() - 1
   cfg, ps = make_net()
-  game_chan = Channel{GameResult}(Threads.nthreads())
+  game_chan = Channel{GameResult}(N)
   param_chan = Channel{typeof(ps)}(1)
-  # put!(param_chan, ps)
-  train_thread = @spawn trainer(cfg, ps, game_chan, param_chan)
-  bind(game_chan, train_thread)
-  bind(param_chan, train_thread)
-  try
-    @sync for p in 1:Threads.nthreads()
-      player_thread = @spawn player(cfg, game_chan, param_chan)
+  put!(param_chan, ps)
+  for _ in 1:N
+      player_thread = Threads.@spawn player(cfg, game_chan, param_chan)
       bind(param_chan, player_thread)
-    end
-  catch my_exception
-    if isa(my_exception, InterruptException)
-      close(param_chan)
-    else rethrow()
-    end
+      errormonitor(player_thread)
   end
+  trainer(cfg, ps, game_chan, param_chan)
 end
 

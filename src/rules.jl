@@ -1,3 +1,8 @@
+const discount = 0.99f0
+const inv_discount = 1/discount
+
+const VALIDATE=false;
+
 const limits = @SVector [7, 8]
 
 const Pos = SVector{2, Int8}
@@ -167,4 +172,50 @@ end
 struct ValuedAction
   action::Action
   value::Float32
+end
+
+apply_action(st::State, a::ValuedAction) = apply_action(st, a.action)
+
+function apply_action(st::State, (pieceix, pos)::Action)
+  if pieceix < 6
+    pieces = (st.positions[st.player].pieces)::SMatrix{2, 5, Int8}
+    ix = LinearIndices(pieces)
+    pmat = setindex(setindex(pieces, pos[1], ix[1, pieceix]), pos[2], ix[2, pieceix])
+    @set st.positions[st.player].pieces = pmat
+  else
+    @set st.positions[st.player].ball = pos
+  end
+end
+
+struct EndState
+  winner::Union{Int8, Nothing}
+  st::State
+  steps::Int
+  states::Vector{State}
+end
+
+function simulate(st::State, players; steps=300, log=false, track=false)
+  player_ixs = st.player == 1 ? (0=>1,1=>2) : (0=>2,1=>1)
+  simulate_(st, players, player_ixs, steps, log, track)
+end
+
+@unroll function simulate_(st::State, players, player_ixs, steps, log, track)
+  states = Vector{State}()
+  for nsteps in 0:steps
+    @unroll for (substep, player) in player_ixs
+      st = @set st.player = player
+      if is_terminal(st)
+        return EndState(next_player(player), st, 2 * nsteps + substep, states)
+      end
+      action = players[player](st)
+      if log
+        log_action(st, action)
+      end
+      st = apply_action(st, action)
+      if track
+        push!(states, st)
+      end
+    end
+  end
+  return EndState(nothing, st, steps, states)
 end
