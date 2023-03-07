@@ -5,8 +5,12 @@ const fake_action = (0, @SVector zeros(2))
 const no_min_action = ValuedAction(fake_action, 1 + eps)
 const no_max_action = ValuedAction(fake_action, -1 - eps)
 
-function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth)
-  if depth == 0
+# TODO: add state normalization
+
+function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth, cache)
+  if !isnothing(cache) && haskey(cache, st)
+    return cache[st]
+  elseif depth == 0
     return ValuedAction(Rand()(st).action, 0)
   end
   for a in shuffled_actions(st) 
@@ -14,23 +18,28 @@ function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth)
     if is_terminal(next_st)
       return ValuedAction(a.action, -1)
     else
-      lb = discount * max_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1)
+      lb = discount * max_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1, cache)
       if lb.value < beta.value
         beta = ValuedAction(a.action, lb.value)
         if alpha.value > beta.value
+          if !isnothing(cache) cache[st] = alpha end
           return alpha
         end
         if alpha.value == beta.value
+          if !isnothing(cache) cache[st] = beta end
           return beta
         end
       end
     end
   end
+  if !isnothing(cache) cache[st] = beta end
   beta
 end
 
-function max_action(st, alpha, beta, depth)
-  if depth == 0
+function max_action(st, alpha, beta, depth, cache)
+  if !isnothing(cache) && haskey(cache, st)
+    return cache[st]
+  elseif depth == 0
     return ValuedAction(Rand()(st).action, 0)
   end
   for a in shuffled_actions(st)
@@ -38,31 +47,36 @@ function max_action(st, alpha, beta, depth)
     if is_terminal(next_st)
       return ValuedAction(a.action, 1)
     else
-      ub = discount * min_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1)
+      ub = discount * min_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1, cache)
       the_action = ValuedAction(a.action, ub.value)
       if ub.value > alpha.value
         alpha = the_action
         if alpha.value > beta.value
+          if !isnothing(cache) cache[st] = beta end
           return beta
         end
         if alpha.value == beta.value
+          if !isnothing(cache) cache[st] = alpha end
           return alpha
         end
       end
     end
   end
+  if !isnothing(cache) cache[st] = alpha end
   alpha
 end
 
-struct AlphaBeta
-  depth::Int
+Base.@kwdef struct AlphaBeta
+  depth::Int = 4
+  cached::Bool = true
 end
 
 function (ab::AlphaBeta)(st)
+  cache = ab.cached ? Dict{State, ValuedAction}() : nothing
   if st.player == 1
-    max_action(st, no_max_action, no_min_action, ab.depth)
+    max_action(st, no_max_action, no_min_action, ab.depth, cache)
   else
-    min_action(st, no_max_action, no_min_action, ab.depth)
+    min_action(st, no_max_action, no_min_action, ab.depth, cache)
   end
 end
 
@@ -136,7 +150,9 @@ end
 
 const greedy_players = (Greedy(), Greedy())
 
-
+# TODO: can we use caches in AlphaBeta too?
+# Don't use the normalization that swaps the players, (too confusing,
+# not useful at this timescale) but the other two should work.
 
 # struct Boltzmann
 #   temp::Float32

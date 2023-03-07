@@ -49,6 +49,9 @@ function gc!(mc::MC)
   end
 end
 
+# TODO: we need to block loops. Otherwise we'll just keep on trying
+# them. 
+
 function expand_leaf!(mcts::MC, nst::State)
   parent_key = nothing
   mcts.time += 1
@@ -144,3 +147,5 @@ function (mcts::MC)(st::State)
 end
 
 classic_mcts(steps) = ClassicMCTS(players=greedy_players, steps=steps)
+
+ab_mcts(steps) = ClassicMCTS(players=(AlphaBeta(1), AlphaBeta(1)), steps=steps)

@@ -11,4 +11,6 @@ AlphaBeta(1) vs AlphaBeta(2): 1.88
 AlphaBeta(1) vs AlphaBeta(3): 1.94
 AlphaBeta(1) vs AlphaBeta(4): 2.0
 AlphaBeta(1) vs Rand(): 1.14
+AlphaBeta(5) vs AlphaBeta(4): 1.14
+AlphaBeta(5) vs AlphaBeta(3): 1.06
 

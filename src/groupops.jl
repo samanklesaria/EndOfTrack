@@ -30,7 +30,9 @@ function group_op(::FlipHor, a::Action)
 end
 
 function group_op(p::TokenPerm, a::Action) 
-  if a[1] < 6
+  if a[1] == 0 # fake action
+    a
+  elseif a[1] < 6
     @set a[1] = p.perm[a[1]]
   else
     a
@@ -45,12 +47,12 @@ struct Transformation
   value_map::Int
 end
 
-function normalized(st)
+function normalized(st::State; player_swaps=true)
   action_map = GroupElt[]
   value_map = 1
   
   # Swap players so that the current player is 1.
-  if st.player == 2
+  if st.player == 2 && player_swaps
     st = fmap(flip_pos_hor, st)
     st = State(1, reverse(st.positions))
     value_map = -1
@@ -64,20 +66,12 @@ function normalized(st)
     push!(action_map, FlipVert())
   end
   
-  # Sort tokens of each player
-  # ixs = fmapstructure(a->sortperm(nestedview(a)), st; exclude=ismat)
-  # st = fmap(st, ixs) do a, ix
-  #   ix === (()) ? a : a[:, ix]
-  # end
-  # push!(action_map, TokenPerm(invperm(ixs.positions[1].pieces)))
-  
-  # Maybe easier: sort tokens of the current player?
-  # ixs = sortperm(nestedview(st.positions[1].pieces))
-  # st2 = @set st.positions[1].pieces = st.positions[1].pieces[:, ixs]
-  # @assert all(st.positions[1].pieces .== st2.positions[1].pieces[:, invperm(ixs)])
-  # st = st2
-  # push!(action_map, TokenPerm(invperm(ixs)))
-  
+  # Sort tokens of the current player
+  pieces = st.positions[st.player].pieces
+  ixs = sortperm(encode(pieces))
+  @set st.positions[st.player].pieces = pieces[:, ixs]
+  push!(action_map, TokenPerm(my_invperm(ixs)))
+   
   if VALIDATE
     assert_valid_state(st)
   end
@@ -87,6 +81,12 @@ end
 
 function (t::Transformation)(a::ValuedAction)
   ValuedAction(t(a.action), t.value_map * a.value)
+end
+
+Base.@propagate_inbounds function my_invperm(p::StaticVector)
+     ip = similar(p)
+     ip[p] = 1:length(p)
+     similar_type(p)(ip)
 end
 
 (t::Transformation)(a::Action) = foldr(group_op, t.action_map; init=a)

@@ -7,6 +7,7 @@ using StatsBase: mean
 using Infiltrator 
 using VisdomLog
 using ThreadTools
+# using GLMakie
 
 include("rules.jl")
 include("util.jl")

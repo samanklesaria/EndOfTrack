@@ -1,8 +1,9 @@
 function winner_test(st, steps, winner)
   test_players = [
-    AlphaBeta(3), 
-    ClassicMCTS(players=greedy_players, steps=10),
-    GreedyMCTS(players=greedy_players, steps=10),
+    AlphaBeta(depth=3, cached=false), 
+    AlphaBeta(depth=3, cached=true),
+    # ClassicMCTS(players=greedy_players, steps=10),
+    # GreedyMCTS(players=greedy_players, steps=10),
     CachedMinimax(3)
   ]
   for p in test_players
