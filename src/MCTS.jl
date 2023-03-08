@@ -7,7 +7,6 @@ using StatsBase: mean
 using Infiltrator 
 using VisdomLog
 using ThreadTools
-# using GLMakie
 
 include("rules.jl")
 include("util.jl")
@@ -17,6 +16,7 @@ include("nn.jl")
 include("classic.jl")
 include("greedy_mcts.jl")
 include("tests.jl")
+include("gui.jl")
 
 function playoff(players)
   N = 50

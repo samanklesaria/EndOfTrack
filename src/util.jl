@@ -63,14 +63,4 @@ function log_action(st, action_val::ValuedAction)
   end
 end
 
-function plot_state(ax, st::State)
-  empty!(ax)
-  scatter!(ax, st.positions[1].pieces[1, :],
-    st.positions[1].pieces[2, :])
-  scatter!(ax, st.positions[1].ball[1:1], st.positions[1].ball[2:2])
-  scatter!(ax, st.positions[2].pieces[1,:],
-    st.positions[2].pieces[2, :])
-  scatter!(ax, st.positions[2].ball[1:1], st.positions[2].ball[2:2])
-end
-
 flip(f) = (a,b)-> f(b,a)
