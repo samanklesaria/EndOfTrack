@@ -17,18 +17,18 @@ end
 Base.hash(a::BackEdge, h::UInt) = hash(a.state, h)
 Base.:(==)(a::BackEdge, b::BackEdge) = a.state == b.state
 
-mutable struct Node
+mutable struct AvgNode
   last_access::Int
   counts::Int
-  edges::Vector{Edge}
-  parents::Set{BackEdge}
+  edges::Vector{Union{Edge, Nothing}}
+  parent::Union{Nothing, BackEdge}
 end
 
 Base.@kwdef mutable struct ClassicMCTS{P} <: MC
   players::P
   time::Int = 0
   last_move_time::Int = 0
-  cache::Dict{State, Node} = Dict{State, Node}()
+  cache::Dict{State, AvgNode} = Dict{State, AvgNode}()
   steps::Int = 100
   rollout_len::Int = 10
 end
@@ -36,11 +36,12 @@ end
 qvalue(::ClassicMCTS, e::Edge) = e.q / e.n
 
 ucb(mc::MC, n::Int, e::Edge) = qvalue(mc, e) + sqrt(2) * sqrt(log(n) / e.n)
+ucb(mc::MC, n::Int, ::Nothing) = -Inf32
 
 function gc!(mc::MC)
   to_delete = Vector{State}()
   for (k,v) in mc.cache
-    if v.last_access < mc.last_move_time
+    if v.last_access <= mc.last_move_time
       push!(to_delete, k)
     end
   end
@@ -49,22 +50,21 @@ function gc!(mc::MC)
   end
 end
 
-# TODO: we need to block loops. Otherwise we'll just keep on trying
-# them. 
-
-function expand_leaf!(mcts::MC, nst::State)
+function expand_leaf!(mcts::ClassicMCTS, nst::State)
   parent_key = nothing
   mcts.time += 1
+  depth = 0
   while true
+    depth += 1
+    @assert depth < 500 
     if haskey(mcts.cache, nst)
       c = mcts.cache[nst]
       if c.last_access == mcts.time
+        mcts.cache[parent_key.state].edges[parent_key.ix] = nothing
         return
       end
       c.last_access = mcts.time
-      if !isnothing(parent_key)
-        push!(c.parents, parent_key)
-      end
+      c.parent = parent_key
       ix = argmax([ucb(mcts, c.counts, e) for e in c.edges])
       # print("Traversing Edge ")
       # log_action(nst, ValuedAction(c.edges[ix].action, 0))
@@ -78,34 +78,34 @@ function expand_leaf!(mcts::MC, nst::State)
     else
       # println("Expanding Leaf")
       # indent!()
-      edges = Edge[rollout(nst, a, mcts.players, mcts.rollout_len) for a in actions(nst)]
+      edges = Union{Edge, Nothing}[rollout(nst, a, mcts.players, mcts.rollout_len) for a in actions(nst)]
       # dedent!()
-      child_qs = [e.q for e in edges]
-      parents = isnothing(parent_key) ? Set{BackEdge}() : Set([parent_key])
-      mcts.cache[nst] = Node(mcts.time, 1, edges, parents)
-      backprop(mcts, nst, child_qs, length(edges))
+      value = sum(e.q for e in edges)
+      mcts.cache[nst] = AvgNode(mcts.time, 0, edges, parent_key)
+      backprop(mcts, nst, discount * value, length(edges))
       return
     end
   end
 end
 
-function backprop(mcts::ClassicMCTS, st::State, child_qs::Vector{Float32}, n::Int)
-  q = discount * sum(child_qs)
-  to_process = DefaultDict{State, Float32}(0f0)
-  to_process[st] = q
-  while length(to_process) > 0
-    (st, q) = pop!(to_process)
+# The Q value of an edge is the discount factor, times the expected value of the state we go to
+# The value of a node is the average of the q values of its edges
+function backprop(mcts::ClassicMCTS, st::State, q::Float32, n::Int)
+  depth = 0
+  while true
+    depth += 1
+    @assert depth < 500
     node = mcts.cache[st]
-    for p in node.parents 
-      if !haskey(mcts.cache, p.state)
-        delete!(node.parents, p.state)
-      else 
-        newq = discount * p.trans.value_map * q
-        edge = mcts.cache[p.state].edges[p.ix]
-        edge.n += n
-        edge.q += newq
-        to_process[p.state] += newq
-      end
+    node.counts += n
+    if isnothing(node.parent) || !haskey(mcts.cache, node.parent.state)
+      return
+    else
+      p = node.parent
+      q = discount * p.trans.value_map * q
+      edge = mcts.cache[p.state].edges[p.ix]
+      edge.n += n
+      edge.q += q
+      st = p.state
     end
   end
 end
@@ -147,5 +147,3 @@ function (mcts::MC)(st::State)
 end
 
 classic_mcts(steps) = ClassicMCTS(players=greedy_players, steps=steps)
-
-ab_mcts(steps) = ClassicMCTS(players=(AlphaBeta(1), AlphaBeta(1)), steps=steps)

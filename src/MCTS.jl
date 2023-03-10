@@ -14,7 +14,7 @@ include("searches.jl")
 include("groupops.jl")
 include("nn.jl")
 include("classic.jl")
-include("greedy_mcts.jl")
+include("max.jl")
 include("tests.jl")
 include("gui.jl")
 
@@ -26,6 +26,24 @@ function playoff(players)
   println("Average winner was $win_avg") 
   # histogram([r.steps for r in results if !isnothing(r.winner)])
 end
+
+function runner(s)
+  seed = Random.rand(UInt8)
+  println("Seed $seed")
+  Random.seed!(seed)
+  simulate(start_state, (Rand(), classic_mcts(20)), steps=s).winner
+end
+
+# TODO:
+# Add normalization option to AlphaBeta
+# Do timing run for different AlphaBeta levels, with/without normalization
+# Get stock MCTS to run. Figure out why it sucks
+# Review RL book
+
+
+# ---
+# Add an MCTS option that doesn't expand all the children
+
 
 # The rollout should use an upper bound of the true value.
 

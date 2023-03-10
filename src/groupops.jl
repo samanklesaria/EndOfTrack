@@ -67,10 +67,10 @@ function normalized(st::State; player_swaps=true)
   end
   
   # Sort tokens of the current player
-  pieces = st.positions[st.player].pieces
-  ixs = sortperm(encode(pieces))
-  @set st.positions[st.player].pieces = pieces[:, ixs]
-  push!(action_map, TokenPerm(my_invperm(ixs)))
+  # pieces = st.positions[st.player].pieces
+  # ixs = sortperm(encode(pieces))
+  # @set st.positions[st.player].pieces = pieces[:, ixs]
+  # push!(action_map, TokenPerm(my_invperm(ixs)))
    
   if VALIDATE
     assert_valid_state(st)
