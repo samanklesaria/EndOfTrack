@@ -72,7 +72,7 @@ function test_net()
   loss
 end
 
-function trainer(cfg, cpu_ps, game_chan, param_chan)
+function trainer(cfg, cpu_ps, game_chan, param_chan, ab_chan)
   ps = gpu(cpu_ps) 
   st_opt = Optimisers.setup(Optimisers.ADAM(1f-4), ps)
   vd=Visdom("mcts_neural")
@@ -88,10 +88,13 @@ function trainer(cfg, cpu_ps, game_chan, param_chan)
     take!(param_chan)
     put!(param_chan, cpu(ps))
     report(vd, "loss", ix, running_loss)
+    report(vd, "weights", fleaves(ps))
     if ix % 20 == 19
       cpu_ps = cpu(ps)
       @save "neural-checkpoint.bson" cpu_ps
       println("Saved")
+      ab_result = take!(ab_chan)
+      report(vd, "validation", ix, ab_result)
     end
     println("Loss ", loss)
   end 
@@ -102,7 +105,7 @@ function player(cfg, game_chan, param_chan)
     params = fetch(param_chan)
     neural_player = Neural(cfg.net, params, cfg.st, 50f0)
     rollout_players = (neural_player, neural_player)
-    mc = MC(players=rollout_players, steps=20)
+    mc = MC(players=rollout_players, steps=50)
     players = (mc, mc)
     result = simulate(start_state, players; track=true) 
     if isnothing(result.winner)
@@ -117,17 +120,40 @@ function player(cfg, game_chan, param_chan)
   end
 end
 
+function val_player(cfg, ab_chan, param_chan)
+  while true
+    params = fetch(param_chan)
+    neural_player = Neural(cfg.net, params, cfg.st, 50f0)
+    rollout_players = (neural_player, neural_player)
+    mc = MC(players=rollout_players, steps=50)
+    players = (AlphaBeta(5), mc)
+    result = simulate(start_state, players) 
+    if isnothing(result.winner)
+      q = 0f0
+    elseif result.winner == 1
+      q = 1f0
+    else
+      q = -1f0
+    end
+    put!(ab_chan, q) 
+  end
+end
+
 function train_loop()
   N = Threads.nthreads() - 1
   cfg, ps = make_net()
   game_chan = Channel{GameResult}(N)
   param_chan = Channel{typeof(ps)}(1)
+  ab_chan = Channel{Float32}()
   put!(param_chan, ps)
-  for _ in 1:N
+  for _ in 1:(N-1)
       player_thread = Threads.@spawn player(cfg, game_chan, param_chan)
       bind(param_chan, player_thread)
       errormonitor(player_thread)
   end
-  trainer(cfg, ps, game_chan, param_chan)
+  player_thread = Threads.@spawn val_player(cfg, ab_chan, param_chan)
+  bind(param_chan, player_thread)
+  errormonitor(player_thread)
+  trainer(cfg, ps, game_chan, param_chan, ab_chan)
 end
 
