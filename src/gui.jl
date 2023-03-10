@@ -92,7 +92,7 @@ function gui()
       end
     end
   end
-  players = (gp, AlphaBeta(depth=5))
+  players = (gp, AlphaBeta(6))
   scatter!(ax, gp.p1, marker=:circle, color=:green, markersize=17)
   scatter!(ax, gp.p2, marker=:circle, color=:red, markersize=17)
   scatter!(ax, gp.b1, marker=:cross, color=:green, markersize=50)

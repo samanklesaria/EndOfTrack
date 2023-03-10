@@ -1,7 +1,7 @@
 const discount = 0.99f0
 const inv_discount = 1/discount
 
-const VALIDATE=true;
+const VALIDATE=false;
 
 const limits = @SVector [7, 8]
 
@@ -196,7 +196,7 @@ end
 
 function simulate(st::State, players; steps=300, log=false, track=false)
   player_ixs = st.player == 1 ? (0=>1,1=>2) : (0=>2,1=>1)
-  simulate_(st, players, player_ixs, steps, log, track)
+  simulate_(st, players, player_ixs, steps ÷ 2, log, track)
 end
 
 @unroll function simulate_(st::State, players, player_ixs, steps, log, track)

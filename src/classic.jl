@@ -30,7 +30,7 @@ Base.@kwdef mutable struct ClassicMCTS{P} <: MC
   last_move_time::Int = 0
   cache::Dict{State, AvgNode} = Dict{State, AvgNode}()
   steps::Int = 100
-  rollout_len::Int = 10
+  rollout_len::Int = 20
 end
 
 qvalue(::ClassicMCTS, e::Edge) = e.q / e.n
@@ -146,4 +146,5 @@ function (mcts::MC)(st::State)
   trans(ValuedAction(mcts, edges[argmax([qvalue(mcts, e) for e in edges])]))
 end
 
-classic_mcts(steps) = ClassicMCTS(players=greedy_players, steps=steps)
+classic_mcts(;steps=20, rollout_len=20) = ClassicMCTS(
+  players=greedy_players, steps=steps, rollout_len=rollout_len)

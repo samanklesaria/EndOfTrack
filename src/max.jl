@@ -18,12 +18,12 @@ qvalue(::MaxMCTS, e::Edge) = e.q
 
 function backprop(mcts::MaxMCTS, st::State, q::Float32, n::Int)
   to_process = Queue{Pair{State, Float32}}()
-  push!(to_process, st=>q)
+  enqueue!(to_process, st=>q)
   seen = Set{State}()
-  while length(to_process) > 0
-    (st, q) = pop!(to_process)
+  while !isempty(to_process)
+    (st, q) = dequeue!(to_process)
     node = mcts.cache[st]
-    node.n += n
+    node.counts += n
     for p in node.parents 
       if !haskey(mcts.cache, p.state)
         delete!(node.parents, p.state)
@@ -34,7 +34,7 @@ function backprop(mcts::MaxMCTS, st::State, q::Float32, n::Int)
         edge.q = max(edge.q, newq)
         if p.state ∉ seen
           push!(seen, p.state) 
-          push!(to_process, p.state=>newq)
+          enqueue!(to_process, p.state=>newq)
         end
       end
     end
@@ -79,4 +79,4 @@ function expand_leaf!(mcts::MaxMCTS, nst::State)
   end
 end
 
-max_mcts(steps) = MaxMCTS(players=greedy_players, steps=steps)
+max_mcts(;steps=20, rollout_len=20) = MaxMCTS(players=greedy_players, steps=steps, rollout_len=rollout_len)

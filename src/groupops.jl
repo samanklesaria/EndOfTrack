@@ -47,12 +47,12 @@ struct Transformation
   value_map::Int
 end
 
-function normalized(st::State; player_swaps=true)
+function normalized(st::State)
   action_map = GroupElt[]
   value_map = 1
   
   # Swap players so that the current player is 1.
-  if st.player == 2 && player_swaps
+  if st.player == 2
     st = fmap(flip_pos_hor, st)
     st = State(1, reverse(st.positions))
     value_map = -1

@@ -5,12 +5,8 @@ const fake_action = (0, @SVector zeros(2))
 const no_min_action = ValuedAction(fake_action, 1 + eps)
 const no_max_action = ValuedAction(fake_action, -1 - eps)
 
-# TODO: add state normalization
-
-function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth, cache)
-  if !isnothing(cache) && haskey(cache, st)
-    return cache[st]
-  elseif depth == 0
+function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth)
+  if depth == 0
     return ValuedAction(Rand()(st).action, 0)
   end
   for a in shuffled_actions(st) 
@@ -18,65 +14,56 @@ function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth, cache)
     if is_terminal(next_st)
       return ValuedAction(a.action, -1)
     else
-      lb = discount * max_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1, cache)
+      lb = discount * max_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1)
       if lb.value < beta.value
         beta = ValuedAction(a.action, lb.value)
         if alpha.value > beta.value
-          if !isnothing(cache) cache[st] = alpha end
           return alpha
         end
         if alpha.value == beta.value
-          if !isnothing(cache) cache[st] = beta end
           return beta
         end
       end
     end
   end
-  if !isnothing(cache) cache[st] = beta end
   beta
 end
 
-function max_action(st, alpha, beta, depth, cache)
-  if !isnothing(cache) && haskey(cache, st)
-    return cache[st]
-  elseif depth == 0
+function max_action(st, alpha, beta, depth)
+  if depth == 0
     return ValuedAction(Rand()(st).action, 0)
   end
   for a in shuffled_actions(st)
-    next_st = @set apply_action(st, a).player = next_player(st.player)
+    next_st = @set apply_action(st, a).player = 2
     if is_terminal(next_st)
       return ValuedAction(a.action, 1)
     else
-      ub = discount * min_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1, cache)
+      ub = discount * min_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1)
       the_action = ValuedAction(a.action, ub.value)
       if ub.value > alpha.value
         alpha = the_action
         if alpha.value > beta.value
-          if !isnothing(cache) cache[st] = beta end
           return beta
         end
         if alpha.value == beta.value
-          if !isnothing(cache) cache[st] = alpha end
           return alpha
         end
       end
     end
   end
-  if !isnothing(cache) cache[st] = alpha end
   alpha
 end
 
-Base.@kwdef struct AlphaBeta
-  depth::Int = 4
-  cached::Bool = true
+struct AlphaBeta
+  depth::Int
 end
 
+
 function (ab::AlphaBeta)(st)
-  cache = ab.cached ? Dict{State, ValuedAction}() : nothing
   if st.player == 1
-    max_action(st, no_max_action, no_min_action, ab.depth, cache)
+    max_action(st, no_max_action, no_min_action, ab.depth)
   else
-    min_action(st, no_max_action, no_min_action, ab.depth, cache)
+    min_action(st, no_max_action, no_min_action, ab.depth)
   end
 end
 

@@ -1,7 +1,6 @@
 function winner_test(st, steps, winner)
   test_players = [
-    AlphaBeta(depth=3, cached=false), 
-    AlphaBeta(depth=3, cached=true),
+    AlphaBeta(3), 
     ClassicMCTS(players=greedy_players, steps=10),
     # GreedyMCTS(players=greedy_players, steps=10),
     CachedMinimax(3)
