@@ -102,7 +102,7 @@ function player(cfg, game_chan, param_chan)
     params = fetch(param_chan)
     neural_player = Neural(cfg.net, params, cfg.st, 50f0)
     rollout_players = (neural_player, neural_player)
-    mc = MC(players=rollout_players, steps=20)
+    mc = MaxMCTS(players=rollout_players, steps=50, rollout_len=10)
     players = (mc, mc)
     result = simulate(start_state, players; track=true) 
     if isnothing(result.winner)
@@ -118,7 +118,7 @@ function player(cfg, game_chan, param_chan)
 end
 
 function train_loop()
-  N = Threads.nthreads() - 1
+  N = Threads.nthreads() - 2
   cfg, ps = make_net()
   game_chan = Channel{GameResult}(N)
   param_chan = Channel{typeof(ps)}(1)

@@ -28,13 +28,15 @@ function backprop(mcts::MaxMCTS, st::State, q::Float32, n::Int)
       if !haskey(mcts.cache, p.state)
         delete!(node.parents, p.state)
       else 
-        newq = discount * p.trans.value_map * q
         edge = mcts.cache[p.state].edges[p.ix]
-        edge.n += n
-        edge.q = max(edge.q, newq)
-        if p.state ∉ seen
-          push!(seen, p.state) 
-          enqueue!(to_process, p.state=>newq)
+        if !isnothing(edge)
+          newq = discount * p.trans.value_map * q
+          edge.n += n
+          edge.q = max(edge.q, newq)
+          if p.state ∉ seen
+            push!(seen, p.state) 
+            enqueue!(to_process, p.state=>newq)
+          end
         end
       end
     end

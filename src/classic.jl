@@ -143,7 +143,8 @@ function (mcts::MC)(st::State)
   #   log_action(st, ValuedAction(e))
   # end
   # dedent!()
-  trans(ValuedAction(mcts, edges[argmax([qvalue(mcts, e) for e in edges])]))
+  trans(ValuedAction(mcts, edges[argmax([
+    isnothing(e) ? -Inf32 : qvalue(mcts, e) for e in edges])]))
 end
 
 classic_mcts(;steps=20, rollout_len=20) = ClassicMCTS(

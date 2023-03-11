@@ -16,29 +16,110 @@ include("nn.jl")
 include("classic.jl")
 include("max.jl")
 include("tests.jl")
-include("gui.jl")
+# include("gui.jl")
 
 function playoff(players)
-  N = 50
-  results = tmap(_->simulate(start_state, players()), 20, 1:N)
+  N = 20
+  results = tmap(_->simulate(start_state, players()), 1:N)
   println("$(sum(isnothing(r.winner) for r in results) / N) were nothing")
   win_avg = mean([r.winner for r in results if !isnothing(r.winner)])
   println("Average winner was $win_avg") 
   # histogram([r.steps for r in results if !isnothing(r.winner)])
 end
 
-mutable struct BenchPlayer{P}
+mutable struct TimeTracker
+  @atomic steps::Int
+  @atomic time::Float64
+end
+
+TimeTracker() = TimeTracker(0, 0.0)
+
+struct BenchPlayer{P}
   player::P
-  steps::Int
-  time::Float64
+  tracker::TimeTracker
 end
 
 function (bp::BenchPlayer)(st)
-  bp.time += @elapsed begin
+  dt = @elapsed begin
     result = bp.player(st)
   end
-  bp.steps += 1
+  @atomic bp.tracker.time += dt
+  @atomic bp.tracker.steps += 1
   result
+end
+
+# Plots:
+# Incremental win rate vs depth
+# Computation time per move vs depth
+function bench_AB()
+  ts = [TimeTracker() for i in 1:6]
+  N = 20
+  win_avgs = [
+    begin
+      results = tmap(_->simulate(start_state,
+        (BenchPlayer(AlphaBeta(i), ts[i]), BenchPlayer(AlphaBeta(i+1), ts[i+1]))), 1:N)
+      mean([r.winner for r in results if !isnothing(r.winner)])
+    end for i in 1:(length(ts) - 1)
+  ]
+  times = [p.time / p.steps for p in ts]
+  times, win_avgs 
+end
+
+# Data for computation time per move vs depth
+function bench_minimax()
+  mm = [BenchPlayer(CachedMinimax(i), TimeTracker()) for i in 1:4]
+  for m in mm
+    simulate(start_state, (m, Rand()))
+  end
+  [p.tracker.time / p.tracker.steps for p in mm]
+end
+
+# Plots:
+# Win rate vs rollout_len for fixed steps 
+# Win rate vs steps for fixed rollout len
+# Computation time for grid of steps, rollout_lens
+function bench_mcts(f)
+  N = 20
+  ls = 10:5:20
+  ss = 10:10:60
+  mc = [TimeTracker() for s in ss for l in ls]
+  mcmat = reshape(mc, length(ls), length(ss))
+  s_comparison  = [
+    [
+      begin
+        results = tmap(_->simulate(start_state,
+          (BenchPlayer(f(steps=ss[s], rollout_len=ls[l]), mcmat[l, s]),
+           BenchPlayer(f(steps=ss[s+1], rollout_len=ls[l]), mcmat[l, s+1]))), Threads.nthreads(), 1:N)
+        mean([r.winner for r in results if !isnothing(r.winner)])
+      end for s in 1:length(ss[1:end-1])
+    ]
+  for l in 1:length(ls)]
+  l_comparison  = [
+    [
+      begin
+        results = tmap(_->simulate(start_state,
+          (BenchPlayer(f(steps=ss[s], rollout_len=ls[l]), mcmat[l, s]),
+           BenchPlayer(f(steps=ss[s], rollout_len=ls[l+1]), mcmat[l+1, s]))), Threads.nthreads(), 1:N)
+        mean([r.winner for r in results if !isnothing(r.winner)])
+      end for l in 1:length(ls[1:end-1])
+    ]
+  for s in 1:length(ss)]
+  times = map(mcmat) do p
+    p.time / p.steps
+  end
+  times, s_comparison, l_comparison 
+end
+
+function winners_circle()
+  N = 20
+  policies = [Rand(), max_mcts(steps=50, rollout_len=10), classic_mcts(steps=50, rollout_len=10), AlphaBeta(depth=6)]
+  for p1 in policies
+    for p2 in policies
+      if p1 !== p2
+        results = tmap(_->simulate(start_state, (p1, p2), 1:N))
+      end
+    end
+  end
 end
 
 # Priorities:
@@ -47,53 +128,13 @@ end
 # While that's happening, try some hueristics
 # After that, look at the shuffle bug.
 
-function bench()
-  abs = [AlphaBeta(i) for i in 1:6]
-  mc = [classic_mcts(steps=s, rollout_len=l) for s in 10:10:100 for l in 10:10:50]
-  players = [Rand() abs mc]
-  # For each AlphaBeta player, keep testing it against its predecessors
-  # until its predecessor always looses. Then stop. Rand is the smallest AlphaBeta
-  
-  # Put the MC players in a matrix. For each player, test with decreasing numbers of steps, then stop.
-  # Then test with decreasing numbers of rollouts, then stop. This defines your comparison region. 
-  # Test everything in the comparison region
-  
-  
-  # A 'rollout vs steps' heatmap of computation time for MCTS
-  # Also a AlphaBeta depth vs computation time plot
-  # A CachedMinimax depth vs computation time plot 
-  # winrate vs steps against previous steps, one line for each rollout amt
-  # winrate vs rollout against previous rollout, one line for each steps
-  
-  # Do the same again for max_mcts.
-  # And perhaps for hueristic use too. 
-  
-  # Then, evaluate the best in each category and put them head to head
-  # We'll make a pairwise competition matrix.
-  
-  # How do you evaluate MCTS against AlphaBeta?
-  
-  # How would we compare all the different MCTS matchups?
-  # Maybe we ONLY compare each to its previous two (less steps and less rollouts)
-  
-  
-  # We would plot this by having rollout vs steps heatmap of wins
-  
-  # Could do the same thing again for the neural policy. 
-  # Also could try simple hueristics (ball position, farthest piece position, etc)
-  
-  # To compare MC and AlphaBeta: WHAT?
-  
-  # There's also the matter of the neural policy, and hueristics.
-  
-  # (BenchPlayer(a), BenchPlayer(b))
-end
-
-function runner(s)
-  seed = Random.rand(UInt8)
-  println("Seed $seed")
-  Random.seed!(seed)
-  simulate(start_state, (AlphaBeta(3), max_mcts(steps=50)), steps=s).winner
+function runner()
+  N = 20
+  ab = TimeTracker()
+  mc = TimeTracker()
+  results = tmap(_->simulate(start_state,
+    (BenchPlayer(AlphaBeta(3), ab), BenchPlayer(max_mcts(steps=10, rollout_len=10), mc))), 1:N)
+  mean([r.winner for r in results if !isnothing(r.winner)])
 end
 
 # Figure out why permutation normalization fails
