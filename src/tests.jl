@@ -9,7 +9,9 @@ function winner_test(st, steps, winner)
     println("\n$(typeof(p))")
     r1 = simulate(st, (p, Rand()), steps=steps + 1, log=true)
     @infiltrate r1.winner != winner
-    @infiltrate r1.steps != steps
+    if !isnothing(winner)
+      @infiltrate r1.steps != steps
+    end
   end
 end
   
@@ -24,18 +26,31 @@ function test()
     PlayerState(
         SVector{2}([4,4]),
         SMatrix{2,5}(Int8[collect(2:6) fill(4, 5)]'))]))
-  println("\n1 step test")
+  println("\n1 step win test")
   winner_test(st1, 1, 1)
-   
+     
   st2 = State(1, SVector{2}([
     PlayerState(
       SVector{2}([4,6]),
       SMatrix{2,5}([5 6; 4 6; 2 1; 3 1; 4 1]')),
     PlayerState(
         SVector{2}([4,4]),
-        SMatrix{2,5}(Int8[collect(2:6) fill(4, 5)]'))]))
-  println("\n2 step test")
+        SMatrix{2,5}(Int8[collect(2:6) fill(4, 5)]'))
+  ]))
+  println("\n2 step win test")
   winner_test(st2, 3, 1)
+  
+  # TODO: something doesn't seem right here.
+  st3 = State(2, SVector{2}([
+    PlayerState(
+      SVector{2}([4,6]),
+      SMatrix{2,5}([5 6; 4 6; 2 1; 3 1; 4 1]')),
+    PlayerState(
+        SVector{2}([4,4]),
+        SMatrix{2,5}(Int8[[collect(3:5) fill(4, 3)]' [4 8; 7 6]']))
+  ]))
+  println("\n1 step block test")
+  winner_test(st3, 3, nothing)
         
   println("\nTerminal state test")
   unnorm_state = State(2, SVector{2}([

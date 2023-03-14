@@ -1,6 +1,6 @@
 module MCTS
 using BSON: @save, @load
-using Lux, NNlib, Zygote, Optimisers
+using Lux, NNlib, Zygote, Optimisers, CUDA
 using StaticArrays, Accessors, Random, ArraysOfArrays, Unrolled
 using Functors, StatsBase, DataStructures
 using StatsBase: mean
@@ -74,13 +74,31 @@ function bench_minimax()
   [p.tracker.time / p.tracker.steps for p in mm]
 end
 
+function mini_mcts_bench()
+  N = 20
+  ss = 10:10:60
+  mc = [TimeTracker() for s in ss]
+  winners = [ begin
+    println("Testing $(ss[s])")
+    results = tmap(_-> simulate(start_state,
+      (BenchPlayer(max_mcts(steps=ss[s], rollout_len=10), mc[s]),
+      (BenchPlayer(max_mcts(steps=ss[s+1], rollout_len=10), mc[s+1])))), Threads.nthreads(), 1:N)
+    mean([r.winner for r in results if !isnothing(r.winner)])
+    end for s in 1:(length(ss) - 1)
+  ]
+  times = map(mc) do p
+    p.time / p.steps
+  end
+  winners, times
+end
+
 # Plots:
 # Win rate vs rollout_len for fixed steps 
 # Win rate vs steps for fixed rollout len
 # Computation time for grid of steps, rollout_lens
 function bench_mcts(f)
-  N = 20
-  ls = 10:5:20
+  N = 40
+  ls = 10:10:20
   ss = 10:10:60
   mc = [TimeTracker() for s in ss for l in ls]
   mcmat = reshape(mc, length(ls), length(ss))
@@ -112,11 +130,14 @@ end
 
 function winners_circle()
   N = 20
-  policies = [Rand(), max_mcts(steps=50, rollout_len=10), classic_mcts(steps=50, rollout_len=10), AlphaBeta(depth=6)]
-  for p1 in policies
-    for p2 in policies
-      if p1 !== p2
-        results = tmap(_->simulate(start_state, (p1, p2), 1:N))
+  policies = [()->Rand(), ()-> max_mcts(steps=50, rollout_len=20), ()->classic_mcts(steps=50, rollout_len=20), ()->AlphaBeta(5)]
+  results = []
+  for p1f in policies
+    for p2f in policies
+      if p1f !== p2f
+        p1 = p1f()
+        p2 = p2f()
+        push!(results, (p1,p2)=> tmap(_->simulate(start_state, (p1, p2)), 1:N))
       end
     end
   end
@@ -137,7 +158,22 @@ function runner()
   mean([r.winner for r in results if !isnothing(r.winner)])
 end
 
-# Figure out why permutation normalization fails
+
+function mcts_match()
+  N = 20
+  results = tmap(_->simulate(start_state,
+    (max_mcts(steps=30, rollout_len=20),
+    max_mcts(steps=50, rollout_len=20))), 1:N)
+  mean([r.winner for r in results if !isnothing(r.winner)])
+end
+
+function both_mcts_match()
+  N = 20
+  results = tmap(_->simulate(start_state,
+    (classic_mcts(steps=50, rollout_len=20),
+    max_mcts(steps=50, rollout_len=20))), 1:N)
+  mean([r.winner for r in results if !isnothing(r.winner)])
+end
 
 # TODO:
 # Add normalization option to AlphaBeta

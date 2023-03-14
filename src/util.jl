@@ -64,3 +64,5 @@ function log_action(st, action_val::ValuedAction)
 end
 
 flip(f) = (a,b)-> f(b,a)
+
+fleaves(a; f=identity, t=Float32, leaf=Functors.isleaf) = foldmap(f, append!, Vector{t}(), a; exclude=leaf)

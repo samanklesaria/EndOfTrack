@@ -1,3 +1,5 @@
+include("hueristics.jl")
+
 Base.:*(a::Number, b::ValuedAction) = ValuedAction(b.action, a * b.value)
 
 const eps = 1e-3
@@ -7,7 +9,7 @@ const no_max_action = ValuedAction(fake_action, -1 - eps)
 
 function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth)
   if depth == 0
-    return ValuedAction(Rand()(st).action, 0)
+    return ValuedAction(Rand()(st).action, the_hueristic(st))
   end
   for a in shuffled_actions(st) 
     next_st = @set apply_action(st, a).player = next_player(st.player)
@@ -31,7 +33,7 @@ end
 
 function max_action(st, alpha, beta, depth)
   if depth == 0
-    return ValuedAction(Rand()(st).action, 0)
+    return ValuedAction(Rand()(st).action, the_hueristic(st))
   end
   for a in shuffled_actions(st)
     next_st = @set apply_action(st, a).player = 2
@@ -99,9 +101,10 @@ function (mm::CachedMinimax)(st::State)
 end
 
 function apply_hueristic(st::State, a::Action)::ValuedAction
-  term = is_terminal(apply_action(st, a))
+  new_st = apply_action(st, a)
+  term = is_terminal(new_st)
   if !term
-    return ValuedAction(a, 0f0)
+    return ValuedAction(a, the_hueristic(new_st))
   else
     return ValuedAction(a, st.player == 1 ? 1 : -1)
   end
