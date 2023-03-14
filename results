@@ -14,6 +14,7 @@ AlphaBeta(1) vs Rand(): 1.14
 AlphaBeta(5) vs AlphaBeta(4): 1.14
 AlphaBeta(5) vs AlphaBeta(3): 1.06
 MCTS(50,20) vs MaxMcts(50,20): 1.55
+MaxMcts(30,20) vs MaxMcts(50,20): 1.60
 MCTS(50,20) vs Rand(): 1.0
 MCTS(30,20) vs Rand(): 1.0
 
