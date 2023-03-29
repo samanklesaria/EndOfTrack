@@ -5,13 +5,14 @@ mutable struct MaxNode
   parents::Set{BackEdge}
 end
 
-Base.@kwdef mutable struct MaxMCTS{P} <: MC
+Base.@kwdef mutable struct MaxMCTS{P,E} <: MC
   players::P
   time::Int = 0
   last_move_time::Int = 0
   cache::Dict{State, MaxNode} = Dict{State, MaxNode}()
   steps::Int = 100
   rollout_len::Int = 10
+  estimator::E
 end
 
 qvalue(::MaxMCTS, e::Edge) = e.q
@@ -70,7 +71,8 @@ function expand_leaf!(mcts::MaxMCTS, nst::State)
     else
       # println("Expanding Leaf")
       # indent!()
-      edges = Union{Edge, Nothing}[rollout(nst, a, mcts.players, mcts.rollout_len) for a in actions(nst)]
+      edges = Union{Edge, Nothing}[rollout(nst, a, mcts.players,
+        mcts.rollout_len, mcts.estimator) for a in actions(nst)]
       # dedent!()
       leaf_q = discount * maximum(e.q for e in edges)
       parents = isnothing(parent_key) ? Set{BackEdge}() : Set([parent_key])
@@ -81,4 +83,5 @@ function expand_leaf!(mcts::MaxMCTS, nst::State)
   end
 end
 
-max_mcts(;steps=20, rollout_len=20) = MaxMCTS(players=greedy_players, steps=steps, rollout_len=rollout_len)
+max_mcts(;steps=20, rollout_len=20) = MaxMCTS(players=greedy_players, steps=steps,
+  rollout_len=rollout_len, estimator=nothing)

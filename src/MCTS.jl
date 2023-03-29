@@ -167,6 +167,16 @@ function mcts_match()
   mean([r.winner for r in results if !isnothing(r.winner)])
 end
 
+function mcts_sanity()
+    cfg, ps = make_net()
+    neural_player = Neural(cfg.net, ps, cfg.st, 50f0)
+    rollout_players = (neural_player, neural_player)
+    mc = MaxMCTS(players=rollout_players, steps=30,
+      rollout_len=10, estimator=neural_player)
+    players = (mc, mc)
+    simulate(start_state, players; track=true) 
+end
+
 function both_mcts_match()
   N = 20
   results = tmap(_->simulate(start_state,
@@ -176,35 +186,18 @@ function both_mcts_match()
 end
 
 # TODO:
-# Add normalization option to AlphaBeta
-# Do timing run for different AlphaBeta levels, with/without normalization
-# Get stock MCTS to run. Figure out why it sucks
-# Review RL book
+# Rather than estimating the value function, could estimate the
+# Q value. This way, a single evaluation of the network could be used
+# to give values for all possible moves. 
 
+# OR: rather than having a bunch of threads, just have a couple, but give
+# them GPUs. Might be worth it.
 
-# ---
-# Add an MCTS option that doesn't expand all the children
-
-
-# The rollout should use an upper bound of the true value.
-
-# Potential things:
-# The GC could prune earler, by removing everything not touched by the chosen action
-# We could only update backwards on the actual path taken rather than all parents. 
-# Or, a middle ground: only keep around the past k parents. 
-# Could also not do state sharing.
 # Could expand a subset of actions rather than all actions when seeing a node. Use a pseudocount
 # Could do double Q learning rather than Q learning
-
-# Hueristics:
-# Position of the ball? Highest player position?
 
 # Optimizations:
 # Encode and use bitvec instead of Dict for ball passing
 # Disable bounds checks
-# Do stuff in parallel
-
-# Fun:
-# Add GUI for human player 
 
 end # module MCTS

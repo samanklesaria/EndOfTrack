@@ -24,13 +24,14 @@ mutable struct AvgNode
   parent::Union{Nothing, BackEdge}
 end
 
-Base.@kwdef mutable struct ClassicMCTS{P} <: MC
+Base.@kwdef mutable struct ClassicMCTS{P,E} <: MC
   players::P
   time::Int = 0
   last_move_time::Int = 0
   cache::Dict{State, AvgNode} = Dict{State, AvgNode}()
   steps::Int = 100
   rollout_len::Int = 20
+  estimator::E
 end
 
 qvalue(::ClassicMCTS, e::Edge) = e.q / e.n
@@ -78,7 +79,8 @@ function expand_leaf!(mcts::ClassicMCTS, nst::State)
     else
       # println("Expanding Leaf")
       # indent!()
-      edges = Union{Edge, Nothing}[rollout(nst, a, mcts.players, mcts.rollout_len) for a in actions(nst)]
+      edges = Union{Edge, Nothing}[rollout(nst, a, mcts.players,
+        mcts.rollout_len, mcts.estimator) for a in actions(nst)]
       # dedent!()
       value = sum(e.q for e in edges)
       mcts.cache[nst] = AvgNode(mcts.time, 0, edges, parent_key)
@@ -110,13 +112,15 @@ function backprop(mcts::ClassicMCTS, st::State, q::Float32, n::Int)
   end
 end
 
-function rollout(st::State, a::Action, players, steps)
+approx_val(::Nothing, _) = 0f0
+
+function rollout(st::State, a::Action, players, steps, approx)
   # printindent("Starting Rollout of ")
   # log_action(st, a)
   next_st = @set apply_action(st, a).player = 2
   endst = simulate(next_st, players; steps=steps)
   if isnothing(endst.winner)
-    endq = 0f0
+    endq = approx_val(approx, endst.st)::Float32
   elseif endst.winner == 1
     endq = 1f0
   else
@@ -148,4 +152,5 @@ function (mcts::MC)(st::State)
 end
 
 classic_mcts(;steps=20, rollout_len=20) = ClassicMCTS(
-  players=greedy_players, steps=steps, rollout_len=rollout_len)
+  players=greedy_players, steps=steps, rollout_len=rollout_len,
+  estimator=nothing)

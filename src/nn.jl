@@ -45,6 +45,14 @@ function (b::Neural)(st::State)
   ValuedAction(choices[ix], values[ix])
 end
 
+function approx_val(b::Neural, st::State)
+  batch = as_pic(st)
+  player = st.player == 1 ? 1 : -1
+  values, _ = Lux.apply(b.net, batch, b.ps, b.st)
+  player * values[1] * b.temp
+end
+
+
 struct GameResult
   value::Float32
   states::Vector{State}
@@ -72,17 +80,15 @@ function test_net()
   loss
 end
 
-function trainer(cfg, cpu_ps, game_chan, param_chan)
+function trainer(cfg, ps, game_chan, param_chan)
   println("Started trainer loop")
-  # device!(6)
-  ps = cpu_ps # gpu(cpu_ps) 
-  st_opt = Optimisers.setup(Optimisers.AdaBelief(1f-4), ps)
+  st_opt = Optimisers.setup(Optimisers.AdaBelief(1f-3), ps)
   vd=Visdom("treesearch")
   running_loss = 0f0
   println("About to get games")
   for (ix, game) in enumerate(game_chan)
     println("Got a game")
-    pics, values = as_pics(game) # gpu.(as_pics(game))
+    pics, values = as_pics(game)
     loss, grad = withgradient(ps) do ps
       q_pred, _ = Lux.apply(cfg.net, pics, ps, cfg.st)
       mean(abs2.(q_pred .- values))
@@ -90,17 +96,16 @@ function trainer(cfg, cpu_ps, game_chan, param_chan)
     running_loss = 0.1f0 * running_loss + 0.9f0 * loss
     st_opt, ps = Optimisers.update!(st_opt, ps, grad[1])
     take!(param_chan)
-    put!(param_chan, cpu(ps))
+    put!(param_chan, ps)
     report(vd, "loss", ix, running_loss)
-    report(vd, "weights", fleaves(ps))
-    if ix % 20 == 19
-      cpu_ps = cpu(ps)
-      @save "neural-checkpoint.bson" cpu_ps
+    if ix % 5 == 4
+      @save "neural-checkpoint.bson" ps
       println("Saved")
     end
-    if ix % 20 == 19
+    if ix % 10 == 9
       val_q = validate(cfg, ps)
       report(vd, "validation", ix, val_q)
+      report(vd, "weights", fleaves(ps))
     end
     println("Loss ", loss)
   end 
@@ -131,7 +136,8 @@ function mcts_player(cfg, game_chan, param_chan)
     println("Started game on $(Threads.threadid())")
     neural_player = Neural(cfg.net, params, cfg.st, 50f0)
     rollout_players = (neural_player, neural_player)
-    mc = MaxMCTS(players=rollout_players, steps=40, rollout_len=10)
+    mc = MaxMCTS(players=rollout_players, steps=40,
+      rollout_len=10, estimator=neural_player)
     players = (mc, mc)
     result = simulate(start_state, players; track=true) 
     gameres = GameResult(game_q(result), result.states)
@@ -143,11 +149,13 @@ end
 function ab_player(game_chan)
   ab = AlphaBeta(5)
   players = (ab, ab)
-  println("Started game on $(Threads.threadid())")
-  result = simulate(start_state, players; track=true) 
-  gameres = GameResult(game_q(result), result.states)
-  println("Ended game on $(Threads.threadid())")
-  put!(game_chan, gameres) 
+  while true
+    println("Started game on $(Threads.threadid())")
+    result = simulate(start_state, players; track=true) 
+    gameres = GameResult(game_q(result), result.states)
+    println("Ended game on $(Threads.threadid())")
+    put!(game_chan, gameres) 
+  end
 end
 
 function ab_trainer(game_chan)
