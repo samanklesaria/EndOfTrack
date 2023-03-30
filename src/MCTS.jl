@@ -67,7 +67,7 @@ end
 
 # Data for computation time per move vs depth
 function bench_minimax()
-  mm = [BenchPlayer(CachedMinimax(i), TimeTracker()) for i in 1:4]
+  mm = [BenchPlayer(CachedMinimax(i), TimeTracker()) for i in 1:5]
   for m in mm
     simulate(start_state, (m, Rand()))
   end
@@ -143,21 +143,13 @@ function winners_circle()
   end
 end
 
-# Priorities:
-# Start by evaluating the two, as you describe in bench.
-# Then, once you have a good baseline, redo NN training.
-# While that's happening, try some hueristics
-# After that, look at the shuffle bug.
-
 function runner()
   N = 20
   ab = TimeTracker()
-  mc = TimeTracker()
   results = tmap(_->simulate(start_state,
-    (BenchPlayer(AlphaBeta(3), ab), BenchPlayer(max_mcts(steps=10, rollout_len=10), mc))), 1:N)
+    (BenchPlayer(CachedMinimax(3), ab), Rand())), 1:N)
   mean([r.winner for r in results if !isnothing(r.winner)])
 end
-
 
 function mcts_match()
   N = 20
@@ -168,13 +160,21 @@ function mcts_match()
 end
 
 function mcts_sanity()
-    cfg, ps = make_net()
+    cfg, ps = make_small_net()
     neural_player = Neural(cfg.net, ps, cfg.st, 50f0)
     rollout_players = (neural_player, neural_player)
-    mc = MaxMCTS(players=rollout_players, steps=30,
+    mc = MaxMCTS(players=rollout_players, steps=20,
       rollout_len=10, estimator=neural_player)
     players = (mc, mc)
     simulate(start_state, players; track=true) 
+end
+
+function ab_sanity()
+    cfg, ps = make_small_net()
+    neural_player = Neural(cfg.net, ps, cfg.st, 50f0)
+    ab = AlphaBeta(4, neural_player)
+    players = (ab, Rand())
+    simulate(start_state, players; steps=2) 
 end
 
 function both_mcts_match()
@@ -186,12 +186,13 @@ function both_mcts_match()
 end
 
 # TODO:
+# Clean up the code (separating Neural approx from player)
+# Is there a way to add Caching to alpha Beta?
+# Ideally: make the NN work on sparse inputs
+
 # Rather than estimating the value function, could estimate the
 # Q value. This way, a single evaluation of the network could be used
-# to give values for all possible moves. 
-
-# OR: rather than having a bunch of threads, just have a couple, but give
-# them GPUs. Might be worth it.
+# to give values for all possible moves. But how do we tell what piece moved?
 
 # Could expand a subset of actions rather than all actions when seeing a node. Use a pseudocount
 # Could do double Q learning rather than Q learning

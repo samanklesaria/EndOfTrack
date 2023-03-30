@@ -17,5 +17,5 @@ function piece_yval_hueristic(st::State)
   end
 end
 
-# the_hueristic(st) = piece_yval_hueristic(st)
-the_hueristic(st) = 0f0
+# fast_hueristic(st) = piece_yval_hueristic(st)
+fast_hueristic(st) = 0f0

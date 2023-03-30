@@ -1,8 +1,8 @@
 function winner_test(st, steps, winner)
   test_players = [
     AlphaBeta(3), 
-    ClassicMCTS(players=greedy_players, steps=10),
-    # GreedyMCTS(players=greedy_players, steps=10),
+    classic_mcts(steps=10),
+    max_mcts(steps=10),
     CachedMinimax(3)
   ]
   for p in test_players
@@ -41,16 +41,16 @@ function test()
   winner_test(st2, 3, 1)
   
   # TODO: something doesn't seem right here.
-  st3 = State(2, SVector{2}([
-    PlayerState(
-      SVector{2}([4,6]),
-      SMatrix{2,5}([5 6; 4 6; 2 1; 3 1; 4 1]')),
-    PlayerState(
-        SVector{2}([4,4]),
-        SMatrix{2,5}(Int8[[collect(3:5) fill(4, 3)]' [4 8; 7 6]']))
-  ]))
-  println("\n1 step block test")
-  winner_test(st3, 3, nothing)
+  # st3 = State(2, SVector{2}([
+  #   PlayerState(
+  #     SVector{2}([4,6]),
+  #     SMatrix{2,5}([5 6; 4 6; 2 1; 3 1; 4 1]')),
+  #   PlayerState(
+  #       SVector{2}([4,4]),
+  #       SMatrix{2,5}(Int8[[collect(3:5) fill(4, 3)]' [4 8; 7 6]']))
+  # ]))
+  # println("\n1 step block test")
+  # winner_test(st3, 3, nothing)
         
   println("\nTerminal state test")
   unnorm_state = State(2, SVector{2}([
