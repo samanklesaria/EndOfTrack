@@ -1,3 +1,5 @@
+abstract type MaxFamily <: MC end
+
 mutable struct MaxNode
   last_access::Int
   counts::Int
@@ -5,7 +7,7 @@ mutable struct MaxNode
   parents::Set{BackEdge}
 end
 
-Base.@kwdef mutable struct MaxMCTS{P,E} <: MC
+Base.@kwdef mutable struct MaxMCTS{P,E} <: MaxFamily
   players::P
   time::Int = 0
   last_move_time::Int = 0
@@ -15,7 +17,7 @@ Base.@kwdef mutable struct MaxMCTS{P,E} <: MC
   estimator::E
 end
 
-qvalue(::MaxMCTS, e::Edge) = e.q
+qvalue(::MaxFamily, e::Edge) = e.q
 
 function backprop(mcts::MaxMCTS, st::State, q::Float32, n::Int)
   to_process = Queue{Pair{State, Float32}}()

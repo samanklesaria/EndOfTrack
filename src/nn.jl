@@ -43,54 +43,61 @@ function make_small_net()
   (;net, st), ps
 end
 
-struct Neural{NN, P, S}
+struct NeuralValue{Norm, NN, P, S}
   net::NN
   ps::P
   st::S
+end
+
+struct NeuralPlayer{NN,P,S}
+  val::NeuralValue{Val{false}, NN,P,S}
   temp::Float32
 end
 
-function sample_choices(st, raw_choices, reward)
+function sample_choices(st, raw_choices)
   k = min(length(raw_choices), 5)
   choices = Vector{ValuedAction}(undef, k)
   sofar = 0
   for a in raw_choices
     new_st = apply_action(st, a)
     if is_terminal(new_st)
-      return [ValuedAction(a, reward)]
+      return [ValuedAction(a, 1f0)]
     end
     if sofar < k
       sofar += 1
-      choices[sofar] = ValuedAction(a, 0)
+      choices[sofar] = ValuedAction(a, 0f0)
     else
-      choices[rand(1:k)] = ValuedAction(a, 0)
+      choices[rand(1:k)] = ValuedAction(a, 0f0)
     end
   end
-  @assert sofar == k
   choices
 end
 
-# Need to normalize before calling this function 
-
-function (b::Neural)(st::State)
+function (b::NeuralPlayer)(st::State)
   raw_choices = actions(st)
-  player = st.player == 1 ? 1 : -1
-  choices = sample_choices(st, raw_choices, player)
+  choices = sample_choices(st, raw_choices)
   if length(choices) == 1
     return choices[1]
   end
-  batch = cat4(as_pic.(apply_action.(Ref(st), choices)))
-  values, _ = Lux.apply(b.net, batch, b.ps, b.st)
-  normalized_values = player .* values[1,:] .* b.temp
-  softmax!(normalized_values)
-  ix = sample(1:length(choices), Weights(normalized_values))
-  ValuedAction(choices[ix].action, normalized_values[ix])
+  next_states = apply_action.(Ref(st), choices)
+  trans, nsts = unzip(normalized.(next_states))
+  batch = cat4(as_pic.(nsts))
+  values, _ = Lux.apply(b.val.net, batch, b.val.ps, b.val.st)
+  scaled_values = values[1,:] .* b.temp
+  softmax!(scaled_values)
+  ix = sample(1:length(choices), Weights(scaled_values))
+  ValuedAction(choices[ix].action, trans[ix].value_map * values[ix])
 end
 
-function approx_val(b::Neural, st::State)
+function approx_val(b::NeuralValue{Val{true}}, st::State)
   batch = as_pic(st)
   values, _ = Lux.apply(b.net, batch, b.ps, b.st)
   values[1]
+end
+
+function approx_val(b::NeuralValue{Val{false}}, st::State)
+  trans, nst = normalized(st)
+  trans(NeuralValue{Val{false}}(b.net, b.ps, b.st)(nst))
 end
 
 struct GameResult
@@ -107,16 +114,7 @@ function as_pics(game::GameResult)
   cat4(stack), multipliers
 end
 
-function test_net()
-  cfg, ps = make_small_net()
-  result = simulate(start_state, greedy_players; track=true) 
-  gameres = GameResult(result.winner == 1 ? 1f0 : -1f0, result.states)
-  pics, values = gpu.(as_pics(gameres))
-  q_pred, _ = Lux.apply(cfg.net, pics, ps, cfg.st)
-  mean(abs2.(q_pred[1,:] .- values))
-end
-
-function trainer(cfg, ps, game_chan, param_chan)
+function mcts_trainer(cfg, ps, game_chan, param_chan)
   println("Started trainer loop")
   st_opt = Optimisers.setup(Optimisers.AdaBelief(1f-3), ps)
   vd=Visdom("treesearch")
@@ -135,11 +133,11 @@ function trainer(cfg, ps, game_chan, param_chan)
     put!(param_chan, ps)
     report(vd, "loss", ix, running_loss)
     if ix % 5 == 4
-      @save "neural-checkpoint.bson" ps
+      @save "alphago-checkpoint.bson" ps
       println("Saved")
     end
     if ix % 10 == 9
-      val_q = validate(cfg, ps)
+      val_q = validate_alphago(cfg, ps)
       report(vd, "validation", ix, val_q)
       report(vd, "weights", fleaves(ps))
     end
@@ -170,7 +168,7 @@ function neural_ab_trainer(cfg, ps, game_chan, param_chan)
       println("Saved")
     end
     if ix % 10 == 9
-      val_q = ab_validate(cfg, ps)
+      val_q = validate_ab(cfg, ps)
       report(vd, "validation", ix, val_q)
       report(vd, "weights", fleaves(ps))
     end
@@ -188,17 +186,19 @@ function game_q(result)
   end
 end
 
-function validate(cfg, params)
-    neural_player = Neural(cfg.net, params, cfg.st, 50f0)
+function validate_alphago(cfg, params)
+    neural_val = NeuralValue{Val{false}}(cfg.net, params, cfg.st)
+    neural_player = NeuralPlayer(neural_val, 50f0)
     rollout_players = (neural_player, neural_player)
-    mc = MaxMCTS(players=rollout_players, steps=40, rollout_len=10)
+    mc = MaxMCTS(players=rollout_players, steps=40,
+      rollout_len=10, estimator=neural_val)
     players = (AlphaBeta(5), mc)
     result = simulate(start_state, players) 
     game_q(result)
 end
 
-function ab_validate(cfg, params)
-    neural = Neural(cfg.net, params, cfg.st, 0f0)
+function validate_ab(cfg, params)
+    neural = NeuralValue{Val{false}}(cfg.net, params, cfg.st)
     players = (AlphaBeta(5, neural), AlphaBeta(5))
     result = simulate(start_state, players) 
     game_q(result)
@@ -208,10 +208,11 @@ function mcts_player(cfg, game_chan, param_chan)
   while true
     params = fetch(param_chan)
     println("Started game on $(Threads.threadid())")
-    neural_player = Neural(cfg.net, params, cfg.st, 50f0)
+    val = NeuralValue{Val{false}}(cfg.net, params, cfg.st)
+    neural_player = NeuralPlayer(val, 50f0)
     rollout_players = (neural_player, neural_player)
     mc = MaxMCTS(players=rollout_players, steps=20,
-      rollout_len=10, estimator=neural_player)
+      rollout_len=10, estimator=val)
     players = (mc, mc)
     result = simulate(start_state, players; track=true) 
     gameres = GameResult(game_q(result), result.states)
@@ -235,7 +236,7 @@ end
 function neural_ab_player(cfg, game_chan, param_chan)
   while true
     params = fetch(param_chan)
-    neural = Neural(cfg.net, params, cfg.st, 0f0)
+    neural = NeuralValue{Val{false}}(cfg.net, params, cfg.st)
     ab = AlphaBeta(5, neural)
     players = (ab, ab)
     println("Started game on $(Threads.threadid())")
@@ -307,7 +308,7 @@ function mcts_train_loop()
   put!(param_chan, ps)
   @threads :static for i in 1:N
       if i == 1
-        trainer(cfg, ps, game_chan, param_chan)
+        mcts_trainer(cfg, ps, game_chan, param_chan)
       else
         mcts_player(cfg, game_chan, param_chan)
       end

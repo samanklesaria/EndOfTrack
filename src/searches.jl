@@ -7,17 +7,20 @@ const fake_action = (0, @SVector zeros(2))
 const no_min_action = ValuedAction(fake_action, 1 + eps)
 const no_max_action = ValuedAction(fake_action, -1 - eps)
 
+function approx_q_val(heuristic, st::State, a::Action)
+  new_st = apply_action(st, a)
+  if is_terminal(new_st) return 1.0 end
+  @set new_st.player = next_player(new_st.player)
+  trans, nst = normalized(new_st)
+  trans.value_map * approx_val(heuristic, nst)
+end
+
 function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth, hueristic)
   if depth == 0
-    if isnothing(hueristic)
-      return ValuedAction(fake_action, 0f0)
-    else
-      trans, nst = normalized(st)
-      return trans(ValuedAction(fake_action, approx_val(hueristic, nst)))
-    end
+    return ValuedAction(fake_action, approx_val(hueristic, st))
   end
   for a in shuffled_actions(st) 
-    next_st = @set apply_action(st, a).player = next_player(st.player)
+    next_st = @set apply_action(st, a).player = 1
     if is_terminal(next_st)
       return ValuedAction(a.action, -1)
     else
@@ -38,12 +41,7 @@ end
 
 function max_action(st, alpha, beta, depth, hueristic)
   if depth == 0
-    if isnothing(hueristic)
-      return ValuedAction(fake_action, 0f0)
-    else
-      trans, nst = normalized(st)
-      return trans(ValuedAction(fake_action, approx_val(hueristic, nst)))
-    end
+    return ValuedAction(fake_action, approx_val(hueristic, st))
   end
   for a in shuffled_actions(st)
     next_st = @set apply_action(st, a).player = 2
@@ -131,7 +129,6 @@ function shuffled_actions(st)
   sort(vacts; by=a-> abs.(a.value), rev= true, alg=MergeSort) 
 end
 
-# This gives some of the benefit of AlphaBeta to minimax
 function smart_actions(st)
   acts = shuffled_actions(st)
   if abs(acts[1].value) == 1f0
@@ -140,29 +137,6 @@ function smart_actions(st)
     acts 
   end
 end
-
-# Some variation of this would be useful
-# if we wanted to use an expensive hueristic. 
-# function get_actions(st, reward)
-#   raw_choices = actions(st)
-#   k = min(length(raw_choices), 5)
-#   choices = Vector{ValuedAction}(undef, k)
-#   sofar = 0
-#   for a in raw_choices
-#     new_st = apply_action(st, a)
-#     if is_terminal(new_st)
-#       return [ValuedAction(a, reward)]
-#     end
-#     if sofar < k
-#       sofar += 1
-#       choices[sofar] = ValuedAction(a, 0)
-#     else
-#       choices[rand(1:k)] = ValuedAction(a, 0)
-#     end
-#   end
-#   @assert sofar == k
-#   choices
-# end
 
 struct Rand end
 
@@ -186,15 +160,3 @@ function (b::Greedy)(st::State)
 end
 
 const greedy_players = (Greedy(), Greedy())
-
-# struct Boltzmann
-#   temp::Float32
-# end
-
-# function (b::Boltzmann)(st::State)
-#   choices = actions(st)
-#   player = st.player == 1 ? 1 : -1
-#   probs = [player .* c.value ./ b.temp for c in choices]
-#   softmax!(probs)
-#   sample(choices, Weights(probs))
-# end

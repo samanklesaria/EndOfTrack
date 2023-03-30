@@ -7,7 +7,7 @@ function winner_test(st, steps, winner)
   ]
   for p in test_players
     println("\n$(typeof(p))")
-    r1 = simulate(st, (p, Rand()), steps=steps + 1, log=true)
+    r1 = simulate(st, (p, p), steps=steps + 1, log=true)
     @infiltrate r1.winner != winner
     if !isnothing(winner)
       @infiltrate r1.steps != steps
@@ -15,6 +15,7 @@ function winner_test(st, steps, winner)
   end
 end
   
+# Problem: 2 is not doing it's job blocking. 
 
 function test()
   Random.seed!(1234)
@@ -40,17 +41,16 @@ function test()
   println("\n2 step win test")
   winner_test(st2, 3, 1)
   
-  # TODO: something doesn't seem right here.
-  # st3 = State(2, SVector{2}([
-  #   PlayerState(
-  #     SVector{2}([4,6]),
-  #     SMatrix{2,5}([5 6; 4 6; 2 1; 3 1; 4 1]')),
-  #   PlayerState(
-  #       SVector{2}([4,4]),
-  #       SMatrix{2,5}(Int8[[collect(3:5) fill(4, 3)]' [4 8; 7 6]']))
-  # ]))
-  # println("\n1 step block test")
-  # winner_test(st3, 3, nothing)
+  st3 = State(2, SVector{2}([
+    PlayerState(
+      SVector{2}([7,6]),
+      SMatrix{2,5}([3 7; 7 6; 2 1; 3 1; 4 1]')),
+    PlayerState(
+        SVector{2}([4,4]),
+        SMatrix{2,5}([3 4; 4 4; 5 4; 6 4; 6 6]'))
+  ]))
+  println("\n1 step block test")
+  winner_test(st3, 5, nothing)
         
   println("\nTerminal state test")
   unnorm_state = State(2, SVector{2}([

@@ -1,4 +1,4 @@
-name = "MCTS"
+name = "EndOfTrack"
 uuid = "6562b248-24c9-44fd-b362-05588c9be571"
 authors = ["Sam Anklesaria <anklesaria@utexs.edu>"]
 version = "0.1.0"
@@ -26,5 +26,6 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 ThreadTools = "dbf13d8f-d36e-4350-8970-f3a99faba1a8"
 Unrolled = "9602ed7d-8fef-5bc8-8597-8f21381861e8"
+Unzip = "41fe7b60-77ed-43a1-b4f0-825fd5a5650d"
 VisdomLog = "b9b00f16-b148-11e8-1d80-65f62d8fa156"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"

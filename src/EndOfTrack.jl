@@ -1,4 +1,4 @@
-module MCTS
+module EndOfTrack
 using BSON: @save, @load
 using Lux, NNlib, Zygote, Optimisers, CUDA
 using StaticArrays, Accessors, Random, ArraysOfArrays, Unrolled
@@ -7,6 +7,7 @@ using StatsBase: mean
 using Infiltrator 
 using VisdomLog
 using ThreadTools
+using Unzip
 
 include("rules.jl")
 include("util.jl")
@@ -15,6 +16,7 @@ include("groupops.jl")
 include("nn.jl")
 include("classic.jl")
 include("max.jl")
+include("noroll.jl")
 include("tests.jl")
 # include("gui.jl")
 
@@ -161,7 +163,8 @@ end
 
 function mcts_sanity()
     cfg, ps = make_small_net()
-    neural_player = Neural(cfg.net, ps, cfg.st, 50f0)
+    val = NeuralValue{Val{false}}(cfg.net, ps, cfg.st)
+    neural_player = NeuralPlayer(val, 50f0)
     rollout_players = (neural_player, neural_player)
     mc = MaxMCTS(players=rollout_players, steps=20,
       rollout_len=10, estimator=neural_player)
@@ -171,8 +174,8 @@ end
 
 function ab_sanity()
     cfg, ps = make_small_net()
-    neural_player = Neural(cfg.net, ps, cfg.st, 50f0)
-    ab = AlphaBeta(4, neural_player)
+    neural_val = NeuralValue{Val{false}}(cfg.net, ps, cfg.st)
+    ab = AlphaBeta(4, neural_val)
     players = (ab, Rand())
     simulate(start_state, players; steps=2) 
 end
@@ -185,20 +188,4 @@ function both_mcts_match()
   mean([r.winner for r in results if !isnothing(r.winner)])
 end
 
-# TODO:
-# Clean up the code (separating Neural approx from player)
-# Is there a way to add Caching to alpha Beta?
-# Ideally: make the NN work on sparse inputs
-
-# Rather than estimating the value function, could estimate the
-# Q value. This way, a single evaluation of the network could be used
-# to give values for all possible moves. But how do we tell what piece moved?
-
-# Could expand a subset of actions rather than all actions when seeing a node. Use a pseudocount
-# Could do double Q learning rather than Q learning
-
-# Optimizations:
-# Encode and use bitvec instead of Dict for ball passing
-# Disable bounds checks
-
-end # module MCTS
+end # module
