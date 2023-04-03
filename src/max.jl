@@ -19,13 +19,14 @@ end
 
 qvalue(::MaxFamily, e::Edge) = e.q
 
-function backprop(mcts::MaxMCTS, st::State, q::Float32, n::Int)
-  to_process = Queue{Pair{State, Float32}}()
-  enqueue!(to_process, st=>q)
+function backprop(mcts::MaxFamily, st::State)
+  to_process = Queue{State}()
+  enqueue!(to_process, st)
   seen = Set{State}()
   while !isempty(to_process)
-    (st, q) = dequeue!(to_process)
+    st = dequeue!(to_process)
     node = mcts.cache[st]
+    # Get all child states. 
     node.counts += n
     for p in node.parents 
       if !haskey(mcts.cache, p.state)

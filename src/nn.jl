@@ -36,8 +36,8 @@ function make_small_net()
     Dense(96, 1, tanh)])
   rng = Random.default_rng()
   ps, st = Lux.setup(rng, net)
-  if isfile("small_checkpoint.bson")
-    @load "small_checkpoint.bson" ps
+  if isfile("checkpoint.bson")
+    @load "checkpoint.bson" ps
     println("Loaded weights")
   end
   (;net, st), ps
@@ -246,6 +246,12 @@ function neural_ab_player(cfg, game_chan, param_chan)
     put!(game_chan, gameres) 
   end
 end
+
+# Ah, we do need to normalize after all. 
+# What if we look at the NoRoll with a zero estimator first?
+# function neural_estimate()
+#   cfg, ps = make_small_net()
+# end
 
 function ab_trainer(game_chan)
   println("Started trainer loop")

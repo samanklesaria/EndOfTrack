@@ -24,15 +24,26 @@ function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth, hueristi
     if is_terminal(next_st)
       return ValuedAction(a.action, -1)
     else
-      lb = discount * max_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1, hueristic)
+      # printindent("Min considering  ")
+      # log_action(st, a)
+      # indent!()
+      recurse = max_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1, hueristic)
+      # dedent!()
+      lb = discount * recurse
       if lb.value < beta.value
         beta = ValuedAction(a.action, lb.value)
         if alpha.value > beta.value
+          # printindent("Parent would discard ")
+          # log_action(next_st, recurse)
           return alpha
         end
         if alpha.value == beta.value
+          # printindent("Best possible is ")
+          # log_action(next_st, recurse)
           return beta
         end
+        # printindent("New best ")
+        # log_action(next_st, recurse)
       end
     end
   end
@@ -48,16 +59,27 @@ function max_action(st, alpha, beta, depth, hueristic)
     if is_terminal(next_st)
       return ValuedAction(a.action, 1)
     else
-      ub = discount * min_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1, hueristic)
+      # printindent("Max considering  ")
+      # log_action(st, a)
+      # indent!()
+      recurse = min_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1, hueristic)
+      # dedent!() 
+      ub = discount * recurse
       the_action = ValuedAction(a.action, ub.value)
       if ub.value > alpha.value
         alpha = the_action
         if alpha.value > beta.value
+          # printindent("Parent would discard ")
+          # log_action(next_st, recurse)
           return beta
         end
         if alpha.value == beta.value
+          # printindent("Best possible is ")
+          # log_action(next_st, recurse)
           return alpha
         end
+        # printindent("New best ")
+        # log_action(next_st, recurse)
       end
     end
   end
@@ -83,18 +105,33 @@ larger_q(a, b) = a.value > b.value ? a : b
 
 function cached_max_action(st::State, depth::Int, cache::Dict, heuristic)
   trans, nst = normalized(st)
-  if is_terminal(nst)
-    trans(ValuedAction(fake_action, -1))
-  elseif haskey(cache, nst)
-    trans(cache[nst])
+  if haskey(cache, nst)
+    result = trans(cache[nst])
+    # printindent("Cached value ")
+    # log_action(st, result)
+    result
+    result
   elseif depth == 0
-    trans(ValuedAction(fake_action, approx_val(heuristic, nst)))
+    result = trans(ValuedAction(fake_action, approx_val(heuristic, nst)))
+    # printindent("Maxdepth ")
+    # log_action(st, result)
+    result
   else
     best_child = mapreduce(larger_q, smart_actions(nst)) do a
       next_st = @set apply_action(nst, a).player = 2
-      child_val = cached_max_action(next_st, depth - 1, cache, heuristic).value
-      ValuedAction(a.action, discount * child_val)
+      if is_terminal(next_st)
+        ValuedAction(a.action, 1)
+      else
+        # printindent("Considering ")
+        # log_action(nst, a)
+        # indent!()
+        child_val = cached_max_action(next_st, depth - 1, cache, heuristic).value
+        # dedent!()
+        ValuedAction(a.action, discount * child_val)
+      end
     end
+    # printindent("Best child ")
+    # log_action(nst, best_child)
     cache[nst] = best_child
     trans(best_child)
   end

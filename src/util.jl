@@ -54,7 +54,9 @@ end
 function log_action(st, action_val::ValuedAction)
   action = action_val.action 
   val = action_val.value
-  if action[1] < 6
+  if action[1] == 0
+    println("[$val] (fake action)")
+  elseif action[1] < 6
     old_pos = st.positions[st.player].pieces[:, action[1]]
     println("[$val] $(st.player) moves from $old_pos to $(action[2])")
   else

@@ -140,13 +140,13 @@ function (mcts::MC)(st::State)
   end
   gc!(mcts)
   edges = mcts.cache[nst].edges
-  # println("Options:")
-  # indent!()
-  # for e in edges
-  #   printindent("")
-  #   log_action(st, ValuedAction(e))
-  # end
-  # dedent!()
+  println("Options:")
+  indent!()
+  for e in edges
+    printindent("")
+    log_action(st, ValuedAction(mcts, e))
+  end
+  dedent!()
   trans(ValuedAction(mcts, edges[argmax([
     isnothing(e) ? -Inf32 : qvalue(mcts, e) for e in edges])]))
 end

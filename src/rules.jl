@@ -1,7 +1,7 @@
 const discount = 0.99f0
 const inv_discount = 1/discount
 
-const VALIDATE=false;
+const VALIDATE=true;
 
 const limits = @SVector [7, 8]
 
