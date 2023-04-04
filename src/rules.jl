@@ -11,13 +11,11 @@ struct PlayerState
   ball::Pos
   pieces::SMatrix{2,5, Int8}
 end
-@functor PlayerState
 
 struct State
   player::Int
   positions::SVector{2, PlayerState}
 end
-@functor State (positions,)
 
 const start_state = State(1, 
   SVector{2}([
@@ -28,7 +26,12 @@ const start_state = State(1,
       SVector{2}([4,8]),
       SMatrix{2,5}(Int8[collect(2:6) fill(8, 5)]'))
       ]))
-      
+
+
+function map_state(f, st::State)      
+  inner = PlayerState[PlayerState(f(p.ball), f(p.pieces)) for p in st.positions]
+  State(st.player, inner)
+end
       
 function is_terminal(state)
   state.positions[1].ball[2] == limits[2] || state.positions[2].ball[2] == 1
