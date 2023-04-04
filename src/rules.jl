@@ -1,7 +1,7 @@
 const discount = 0.99f0
 const inv_discount = 1/discount
 
-const VALIDATE=true;
+const VALIDATE=false;
 
 const limits = @SVector [7, 8]
 
@@ -18,12 +18,6 @@ struct State
   positions::SVector{2, PlayerState}
 end
 @functor State (positions,)
-
-# Base.:(==)(a::State, b::State) = foldmap(&, true, a, b) do a, b
-#   all(a .== b)
-# end
-
-# Base.hash(a::State, u::UInt) = foldmap(identity, flip(hash), h, a)
 
 const start_state = State(1, 
   SVector{2}([

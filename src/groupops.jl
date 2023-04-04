@@ -47,6 +47,11 @@ struct Transformation
   value_map::Int
 end
 
+
+# Perhaps we want a softmax, not a true max. 
+# Just as classic mcts is policy evaluation for the random player,
+# Softmax would do policy evaluation for the boltzman player
+
 function normalized(st::State)
   action_map = GroupElt[]
   value_map = 1
@@ -60,11 +65,11 @@ function normalized(st::State)
   end
   
   # # Flip the board left or right
-  # st2 = fmap(flip_pos_vert, st)
-  # if hash(st2) > hash(st)
-  #   st = st2
-  #   push!(action_map, FlipVert())
-  # end
+  st2 = fmap(flip_pos_vert, st)
+  if hash(st2) > hash(st)
+    st = st2
+    push!(action_map, FlipVert())
+  end
   
   # Sort tokens of the current player
   # pieces = st.positions[st.player].pieces

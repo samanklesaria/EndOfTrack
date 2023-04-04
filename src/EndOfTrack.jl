@@ -8,14 +8,13 @@ using Infiltrator
 using VisdomLog
 using ThreadTools
 using Unzip
+using LogExpFunctions
 
 include("rules.jl")
 include("util.jl")
 include("searches.jl")
 include("groupops.jl")
 include("nn.jl")
-include("classic.jl")
-include("max.jl")
 include("noroll.jl")
 include("tests.jl")
 # include("gui.jl")

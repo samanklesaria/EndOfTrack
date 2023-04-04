@@ -1,9 +1,9 @@
+# TODO: why is NoRoll soooo slow?
+
 function winner_test(st, steps, winner)
   test_players = [
     # AlphaBeta(4), 
-    # classic_mcts(steps=10),
-    # max_mcts(steps=35, rollout_len=4),
-    NoRoll(estimator=nothing)
+    NoRoll(estimator=nothing),
     # CachedMinimax(4)
   ]
   for p in test_players
@@ -63,7 +63,19 @@ function test()
   # println("\nAnother 2 step win test")
   # winner_test(st3, 3, 1)
   
-  st3 = State(2, SVector{2}([
+  
+  # st3 = State(2, SVector{2}([
+  #   PlayerState(
+  #     SVector{2}([7,6]),
+  #     SMatrix{2,5}([5 8; 7 6; 2 1; 3 1; 4 1]')),
+  #   PlayerState(
+  #       SVector{2}([4,4]),
+  #       SMatrix{2,5}([4 6; 4 4; 5 4; 6 4; 6 6]'))
+  # ]))
+  # println("\n1 step block test")
+  # winner_test(st3, 0, nothing)
+  
+  st4 = State(2, SVector{2}([
     PlayerState(
       SVector{2}([7,6]),
       SMatrix{2,5}([3 7; 7 6; 2 1; 3 1; 4 1]')),
@@ -71,8 +83,8 @@ function test()
         SVector{2}([4,4]),
         SMatrix{2,5}([3 4; 4 4; 5 4; 6 4; 6 6]'))
   ]))
-  println("\n1 step block test")
-  winner_test(st3, 0, nothing)
+  println("\n2 step block test")
+  winner_test(st4, 4, nothing)
         
   # println("\nTerminal state test")
   # unnorm_state = State(2, SVector{2}([

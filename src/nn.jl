@@ -110,8 +110,10 @@ cat4(stack) = reduce((x,y)->cat(x,y; dims=4), stack)
 function as_pics(game::GameResult)
   multipliers = [1; cumprod(fill(discount, length(game.states) - 1))]
   reverse!(multipliers)
-  stack = as_pic.(game.states)
-  cat4(stack), multipliers
+  trans, nsts = unzip(normalized.(game.states))
+  values = multipliers .* [t.value_map for t in trans] .* game.value
+  stack = as_pic.(nsts)
+  cat4(stack), values
 end
 
 function mcts_trainer(cfg, ps, game_chan, param_chan)
@@ -246,12 +248,6 @@ function neural_ab_player(cfg, game_chan, param_chan)
     put!(game_chan, gameres) 
   end
 end
-
-# Ah, we do need to normalize after all. 
-# What if we look at the NoRoll with a zero estimator first?
-# function neural_estimate()
-#   cfg, ps = make_small_net()
-# end
 
 function ab_trainer(game_chan)
   println("Started trainer loop")

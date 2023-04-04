@@ -7,6 +7,8 @@ const fake_action = (0, @SVector zeros(2))
 const no_min_action = ValuedAction(fake_action, 1 + eps)
 const no_max_action = ValuedAction(fake_action, -1 - eps)
 
+approx_val(::Nothing, _) = 0f0
+
 function approx_q_val(heuristic, st::State, a::Action)
   new_st = apply_action(st, a)
   if is_terminal(new_st) return 1.0 end
