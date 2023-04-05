@@ -12,7 +12,7 @@ approx_val(::Nothing, _) = 0f0
 function approx_q_val(heuristic, st::State, a::Action)
   new_st = apply_action(st, a)
   if is_terminal(new_st) return 1.0 end
-  @set new_st.player = next_player(new_st.player)
+  new_st = @set new_st.player = next_player(new_st.player)
   trans, nst = normalized(new_st)
   trans.value_map * approx_val(heuristic, nst)
 end

@@ -65,7 +65,7 @@ function backprop(mcts, st::State)
     st = dequeue!(to_process)
     node = mcts.cache[st]
     node.counts += 1
-    node.q = softmaximum([e.q for e in node.edges if !isnothing(e)])
+    node.q = softmaximum(Float32[e.q for e in node.edges if !isnothing(e)])
     for p in node.parents 
       if !haskey(mcts.cache, p.state)
         delete!(node.parents, p.state)
