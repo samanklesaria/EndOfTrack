@@ -49,46 +49,6 @@ struct NeuralValue{Norm, NN, P, S}
   st::S
 end
 
-struct NeuralPlayer{NN,P,S}
-  val::NeuralValue{Val{false}, NN,P,S}
-  temp::Float32
-end
-
-function sample_choices(st, raw_choices)
-  k = min(length(raw_choices), 5)
-  choices = Vector{ValuedAction}(undef, k)
-  sofar = 0
-  for a in raw_choices
-    new_st = apply_action(st, a)
-    if is_terminal(new_st)
-      return [ValuedAction(a, 1f0)]
-    end
-    if sofar < k
-      sofar += 1
-      choices[sofar] = ValuedAction(a, 0f0)
-    else
-      choices[rand(1:k)] = ValuedAction(a, 0f0)
-    end
-  end
-  choices
-end
-
-function (b::NeuralPlayer)(st::State)
-  raw_choices = actions(st)
-  choices = sample_choices(st, raw_choices)
-  if length(choices) == 1
-    return choices[1]
-  end
-  next_states = apply_action.(Ref(st), choices)
-  trans, nsts = unzip(normalized.(next_states))
-  batch = cat4(as_pic.(nsts))
-  values, _ = Lux.apply(b.val.net, batch, b.val.ps, b.val.st)
-  scaled_values = values[1,:] .* b.temp
-  softmax!(scaled_values)
-  ix = sample(1:length(choices), Weights(scaled_values))
-  ValuedAction(choices[ix].action, trans[ix].value_map * values[ix])
-end
-
 function approx_val(b::NeuralValue{Val{true}}, st::State)
   batch = as_pic(st)
   values, _ = Lux.apply(b.net, batch, b.ps, b.st)
@@ -97,7 +57,7 @@ end
 
 function approx_val(b::NeuralValue{Val{false}}, st::State)
   trans, nst = normalized(st)
-  trans(NeuralValue{Val{false}}(b.net, b.ps, b.st)(nst))
+  trans(NeuralValue{Val{true}}(b.net, b.ps, b.st)(nst))
 end
 
 struct GameResult
@@ -116,37 +76,6 @@ function as_pics(game::GameResult)
   cat4(stack), values
 end
 
-function mcts_trainer(cfg, ps, game_chan, param_chan)
-  println("Started trainer loop")
-  st_opt = Optimisers.setup(Optimisers.AdaBelief(1f-3), ps)
-  vd=Visdom("treesearch")
-  running_loss = 0f0
-  println("About to get games")
-  for (ix, game) in enumerate(game_chan)
-    println("Got a game")
-    pics, values = as_pics(game)
-    loss, grad = withgradient(ps) do ps
-      q_pred, _ = Lux.apply(cfg.net, pics, ps, cfg.st)
-      mean(abs2.(q_pred .- values))
-    end
-    running_loss = 0.1f0 * running_loss + 0.9f0 * loss
-    st_opt, ps = Optimisers.update!(st_opt, ps, grad[1])
-    take!(param_chan)
-    put!(param_chan, ps)
-    report(vd, "loss", ix, running_loss)
-    if ix % 5 == 4
-      @save "alphago-checkpoint.bson" ps
-      println("Saved")
-    end
-    if ix % 10 == 9
-      val_q = validate_alphago(cfg, ps)
-      report(vd, "validation", ix, val_q)
-      report(vd, "weights", fleaves(ps))
-    end
-    println("Loss ", loss)
-  end 
-end
-
 function neural_ab_trainer(cfg, ps, game_chan, param_chan)
   println("Started trainer loop")
   st_opt = Optimisers.setup(Optimisers.AdaBelief(1f-3), ps)
@@ -162,8 +91,10 @@ function neural_ab_trainer(cfg, ps, game_chan, param_chan)
     end
     running_loss = 0.1f0 * running_loss + 0.9f0 * loss
     st_opt, ps = Optimisers.update!(st_opt, ps, grad[1])
+    print("Putting new params")
     take!(param_chan)
     put!(param_chan, ps)
+    print("Placed new params")
     report(vd, "loss", ix, running_loss)
     if ix % 5 == 4
       @save "neural-checkpoint.bson" ps
@@ -188,39 +119,11 @@ function game_q(result)
   end
 end
 
-function validate_alphago(cfg, params)
-    neural_val = NeuralValue{Val{false}}(cfg.net, params, cfg.st)
-    neural_player = NeuralPlayer(neural_val, 50f0)
-    rollout_players = (neural_player, neural_player)
-    mc = MaxMCTS(players=rollout_players, steps=40,
-      rollout_len=10, estimator=neural_val)
-    players = (AlphaBeta(5), mc)
-    result = simulate(start_state, players) 
-    game_q(result)
-end
-
 function validate_ab(cfg, params)
     neural = NeuralValue{Val{false}}(cfg.net, params, cfg.st)
-    players = (AlphaBeta(5, neural), AlphaBeta(5))
+    players = (AlphaBeta(4, neural), AlphaBeta(4))
     result = simulate(start_state, players) 
     game_q(result)
-end
-
-function mcts_player(cfg, game_chan, param_chan)
-  while true
-    params = fetch(param_chan)
-    println("Started game on $(Threads.threadid())")
-    val = NeuralValue{Val{false}}(cfg.net, params, cfg.st)
-    neural_player = NeuralPlayer(val, 50f0)
-    rollout_players = (neural_player, neural_player)
-    mc = MaxMCTS(players=rollout_players, steps=20,
-      rollout_len=10, estimator=val)
-    players = (mc, mc)
-    result = simulate(start_state, players; track=true) 
-    gameres = GameResult(game_q(result), result.states)
-    println("Ended game on $(Threads.threadid())")
-    put!(game_chan, gameres) 
-  end
 end
 
 function ab_player(game_chan)
@@ -235,11 +138,14 @@ function ab_player(game_chan)
   end
 end
 
+#Also: do we need the 'val' wrapper? Or can we use the raw bool?
+
 function neural_ab_player(cfg, game_chan, param_chan)
   while true
-    params = fetch(param_chan)
+    params = take!(param_chan)
+    put!(param_chan, params)
     neural = NeuralValue{Val{false}}(cfg.net, params, cfg.st)
-    ab = AlphaBeta(5, neural)
+    ab = AlphaBeta(4, neural)
     players = (ab, ab)
     println("Started game on $(Threads.threadid())")
     result = simulate(start_state, players; track=true) 
@@ -287,33 +193,54 @@ function ab_train_loop()
   end
 end
 
+function fake_trainer(cfg, ps, game_chan, param_chan)
+  for game in enumerate(game_chan)
+    println("Got a game")
+    sleep(0.5)
+    print("Putting new params")
+    take!(param_chan)
+    put!(param_chan, ps)
+    print("Placed new params")
+  end
+end
+
+function fake_player(cfg, game_chan, param_chan)
+  while true
+    ps = take!(param_chan)
+    put!(param_chan, ps)
+    println("Ran game on $(Threads.threadid())")
+    put!(game_chan, 2)
+  end
+end
+
+function fake_train_loop()
+  N = Threads.nthreads() - 1
+  cfg, ps = make_small_net()
+  game_chan = Channel{Int}(N-1)
+  param_chan = Channel{typeof(ps)}(1)
+  put!(param_chan, ps)
+  @threads :static for i in 1:N
+    if i == 1
+      fake_trainer(cfg, ps, game_chan, param_chan)
+    else
+      fake_player(cfg, game_chan, param_chan)
+    end
+  end
+end
+
 function neural_ab_train_loop()
-  N = Threads.nthreads() - 1
+  N = Threads.nthreads()
   cfg, ps = make_small_net()
   game_chan = Channel{GameResult}(N-1)
   param_chan = Channel{typeof(ps)}(1)
   put!(param_chan, ps)
-  @threads :static for i in 1:N
-      if i == 1
-        neural_ab_trainer(cfg, ps, game_chan, param_chan)
-      else
-        neural_ab_player(cfg, game_chan, param_chan)
-      end
-  end
+  @async neural_ab_trainer(cfg, ps, game_chan, param_chan)
+  @async neural_ab_player(cfg, game_chan, param_chan)
+  # @threads :static for i in 1:N
+  #     if i == 1
+  #       neural_ab_trainer(cfg, ps, game_chan, param_chan)
+  #     else
+  #       neural_ab_player(cfg, game_chan, param_chan)
+  #     end
+  # end
 end
-
-function mcts_train_loop()
-  N = Threads.nthreads() - 1
-  cfg, ps = make_small_net()
-  game_chan = Channel{GameResult}(N-1)
-  param_chan = Channel{typeof(ps)}(1)
-  put!(param_chan, ps)
-  @threads :static for i in 1:N
-      if i == 1
-        mcts_trainer(cfg, ps, game_chan, param_chan)
-      else
-        mcts_player(cfg, game_chan, param_chan)
-      end
-  end
-end
-
