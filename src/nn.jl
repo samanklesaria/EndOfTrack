@@ -2,11 +2,11 @@ function as_pic(st::State)
   pic = zeros(Float32, 7,8,4,1)
   for i in 1:2
     for j in 1:5
-      row, col = st.positions[i].pieces[:, j]
-      pic[row, col, 2 * (i-1) + 1, 1] = 1
+      x, y = st.positions[i].pieces[:, j]
+      pic[x, y, i, 1] = 1
     end
-    row, col = st.positions[i].ball
-    pic[row, col, 2 * (i-1) + 2, 1] = 1
+    x, y = st.positions[i].ball
+    pic[x, y, 2 + i, 1] = 1
   end
   pic
 end
@@ -30,10 +30,10 @@ end
 
 function make_small_net()
   net = Chain([
-    CrossCor((3,3), 4=>8, relu),
-    CrossCor((3,3), 8=>8, relu),
+    CrossCor((4,4), 4=>8, relu),
+    CrossCor((4,4), 8=>8, relu),
     FlattenLayer(),
-    Dense(96, 1, tanh)])
+    Dense(16, 1, tanh)])
   rng = Random.default_rng()
   ps, st = Lux.setup(rng, net)
   if isfile("checkpoint.bson")
@@ -43,21 +43,17 @@ function make_small_net()
   (;net, st), ps
 end
 
-struct NeuralValue{Norm, NN, P, S}
+struct NeuralValue{NN, P, S}
   net::NN
   ps::P
   st::S
 end
 
-function approx_val(b::NeuralValue{Val{true}}, st::State)
-  batch = as_pic(st)
-  values, _ = Lux.apply(b.net, batch, b.ps, b.st)
-  values[1]
-end
-
-function approx_val(b::NeuralValue{Val{false}}, st::State)
+function approx_val(b::NeuralValue, st::State)
   trans, nst = normalized(st)
-  trans(NeuralValue{Val{true}}(b.net, b.ps, b.st)(nst))
+  batch = as_pic(nst)
+  values, _ = Lux.apply(b.net, batch, b.ps, b.st)
+  0.5 * trans.value_map * values[1]
 end
 
 struct GameResult
@@ -66,6 +62,12 @@ struct GameResult
 end
 
 cat4(stack) = reduce((x,y)->cat(x,y; dims=4), stack)
+
+function simple_test()
+  result = simulate(start_state, (AlphaBeta(3), AlphaBeta(3)); track=true)
+  gameres = GameResult(game_q(result), result.states)
+  as_pics(gameres)
+end
 
 function as_pics(game::GameResult)
   multipliers = [1; cumprod(fill(discount, length(game.states) - 1))]
@@ -91,10 +93,8 @@ function neural_ab_trainer(cfg, ps, game_chan, param_chan)
     end
     running_loss = 0.1f0 * running_loss + 0.9f0 * loss
     st_opt, ps = Optimisers.update!(st_opt, ps, grad[1])
-    print("Putting new params")
     take!(param_chan)
     put!(param_chan, ps)
-    print("Placed new params")
     report(vd, "loss", ix, running_loss)
     if ix % 5 == 4
       @save "neural-checkpoint.bson" ps
@@ -102,7 +102,7 @@ function neural_ab_trainer(cfg, ps, game_chan, param_chan)
     end
     if ix % 10 == 9
       val_q = validate_ab(cfg, ps)
-      report(vd, "validation", ix, val_q)
+      report(vd, "validation", ix, val_q; log=false, scatter=true)
       report(vd, "weights", fleaves(ps))
     end
     println("Loss ", loss)
@@ -120,7 +120,7 @@ function game_q(result)
 end
 
 function validate_ab(cfg, params)
-    neural = NeuralValue{Val{false}}(cfg.net, params, cfg.st)
+    neural = NeuralValue(cfg.net, params, cfg.st)
     players = (AlphaBeta(4, neural), AlphaBeta(4))
     result = simulate(start_state, players) 
     game_q(result)
@@ -138,13 +138,11 @@ function ab_player(game_chan)
   end
 end
 
-#Also: do we need the 'val' wrapper? Or can we use the raw bool?
-
 function neural_ab_player(cfg, game_chan, param_chan)
   while true
     params = take!(param_chan)
     put!(param_chan, params)
-    neural = NeuralValue{Val{false}}(cfg.net, params, cfg.st)
+    neural = NeuralValue(cfg.net, params, cfg.st)
     ab = AlphaBeta(4, neural)
     players = (ab, ab)
     println("Started game on $(Threads.threadid())")
@@ -158,13 +156,13 @@ end
 function ab_trainer(game_chan)
   println("Started trainer loop")
   cfg, ps = make_small_net()
-  st_opt = Optimisers.setup(Optimisers.AdaBelief(1f-4), ps)
+  st_opt = Optimisers.setup(Optimisers.AdaBelief(1f-3), ps)
   vd=Visdom("abpredict")
   running_loss = 0f0
   println("About to get games")
   for (ix, game) in enumerate(game_chan)
     println("Got a game")
-    pics, values = as_pics(game) # gpu.(as_pics(game))
+    pics, values = as_pics(game)
     loss, grad = withgradient(ps) do ps
       q_pred, _ = Lux.apply(cfg.net, pics, ps, cfg.st)
       mean(abs2.(q_pred .- values))
@@ -172,10 +170,15 @@ function ab_trainer(game_chan)
     running_loss = 0.1f0 * running_loss + 0.9f0 * loss
     st_opt, ps = Optimisers.update!(st_opt, ps, grad[1])
     report(vd, "loss", ix, running_loss)
-    if ix % 5 == 1
+    if ix % 5 == 4
       report(vd, "weights", fleaves(ps))
       @save "ab-checkpoint.bson" ps
       println("Saved")
+    end
+    if ix % 10 == 9
+      val_q = validate_ab(cfg, ps)
+      report(vd, "validation", ix, val_q; log=false, scatter=true)
+      report(vd, "weights", fleaves(ps))
     end
     println("Loss ", loss)
   end 
@@ -229,18 +232,16 @@ function fake_train_loop()
 end
 
 function neural_ab_train_loop()
-  N = Threads.nthreads()
+  N = Threads.nthreads() - 1
   cfg, ps = make_small_net()
   game_chan = Channel{GameResult}(N-1)
   param_chan = Channel{typeof(ps)}(1)
   put!(param_chan, ps)
-  @async neural_ab_trainer(cfg, ps, game_chan, param_chan)
-  @async neural_ab_player(cfg, game_chan, param_chan)
-  # @threads :static for i in 1:N
-  #     if i == 1
-  #       neural_ab_trainer(cfg, ps, game_chan, param_chan)
-  #     else
-  #       neural_ab_player(cfg, game_chan, param_chan)
-  #     end
-  # end
+  @threads :static for i in 1:N
+      if i == 1
+        neural_ab_trainer(cfg, ps, game_chan, param_chan)
+      else
+        neural_ab_player(cfg, game_chan, param_chan)
+      end
+  end
 end
