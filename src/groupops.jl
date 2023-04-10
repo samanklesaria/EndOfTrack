@@ -39,8 +39,16 @@ function group_op(p::TokenPerm, a::Action)
   end
 end
 
-ismat(::SMatrix) = true
-ismat(_) = false
+# Just for packaging games for the nn
+function normalize_player(st)
+  if st.player == 2
+    st = map_state(flip_pos_hor, st)
+    st = State(1, reverse(st.positions))
+    (-1, st)
+  else
+    (1, st)
+  end
+end
 
 struct Transformation
   action_map::Vector{GroupElt}
@@ -67,17 +75,16 @@ function normalized(st::State)
   end
   
   # Sort tokens of the current player
-  pieces = st.positions[st.player].pieces
-  ixs = sortperm(encode(pieces))
-  st = @set st.positions[st.player].pieces = pieces[:, ixs]
-  push!(action_map, TokenPerm(my_invperm(ixs)))
+  # pieces = st.positions[st.player].pieces
+  # ixs = sortperm(encode(pieces))
+  # st = @set st.positions[st.player].pieces = pieces[:, ixs]
+  # push!(action_map, TokenPerm(my_invperm(ixs)))
    
   if VALIDATE
     assert_valid_state(st)
   end
   Transformation(action_map, value_map), st
 end
-
 
 function (t::Transformation)(a::ValuedAction)
   ValuedAction(t(a.action), t.value_map * a.value)

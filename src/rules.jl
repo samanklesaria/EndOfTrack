@@ -191,7 +191,7 @@ struct EndState
   states::Vector{State}
 end
 
-function simulate(st::State, players; steps=200, log=false, track=false)
+function simulate(st::State, players; steps=150, log=false, track=false)
   player_ixs = st.player == 1 ? (0=>1,1=>2) : (0=>2,1=>1)
   simulate_(st, players, player_ixs, steps ÷ 2, log, track)
 end

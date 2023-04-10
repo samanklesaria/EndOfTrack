@@ -7,21 +7,16 @@ const fake_action = (0, @SVector zeros(2))
 const no_min_action = ValuedAction(fake_action, 1 + eps)
 const no_max_action = ValuedAction(fake_action, -1 - eps)
 
-approx_val(::Nothing, _) = 0f0
-
-function approx_q_val(heuristic, st::State, a::Action)
+function will_win(st::State, a::Action)
   new_st = apply_action(st, a)
-  if is_terminal(new_st) return 1.0 end
-  new_st = @set new_st.player = next_player(new_st.player)
-  trans, nst = normalized(new_st)
-  trans.value_map * approx_val(heuristic, nst)
+  is_terminal(new_st)
 end
 
-function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth, hueristic)
+function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth, ab)
   if depth == 0
-    return ValuedAction(fake_action, approx_val(hueristic, st))
+    return ValuedAction(fake_action, 0f0)
   end
-  for a in shuffled_actions(st) 
+  for a in shuffled_actions(ab.rng, st) 
     next_st = @set apply_action(st, a).player = 1
     if is_terminal(next_st)
       return ValuedAction(a.action, -1)
@@ -29,7 +24,7 @@ function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth, hueristi
       # printindent("Min considering  ")
       # log_action(st, a)
       # indent!()
-      recurse = max_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1, hueristic)
+      recurse = max_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1, ab)
       # dedent!()
       lb = discount * recurse
       if lb.value < beta.value
@@ -52,11 +47,11 @@ function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth, hueristi
   beta
 end
 
-function max_action(st, alpha, beta, depth, hueristic)
+function max_action(st, alpha, beta, depth, ab)
   if depth == 0
-    return ValuedAction(fake_action, approx_val(hueristic, st))
+    return ValuedAction(fake_action, 0f0)
   end
-  for a in shuffled_actions(st)
+  for a in shuffled_actions(ab.rng, st)
     next_st = @set apply_action(st, a).player = 2
     if is_terminal(next_st)
       return ValuedAction(a.action, 1)
@@ -64,7 +59,7 @@ function max_action(st, alpha, beta, depth, hueristic)
       # printindent("Max considering  ")
       # log_action(st, a)
       # indent!()
-      recurse = min_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1, hueristic)
+      recurse = min_action(next_st, inv_discount * alpha, inv_discount * beta, depth - 1, ab)
       # dedent!() 
       ub = discount * recurse
       the_action = ValuedAction(a.action, ub.value)
@@ -88,38 +83,32 @@ function max_action(st, alpha, beta, depth, hueristic)
   alpha
 end
 
-struct AlphaBeta{H}
+struct AlphaBeta
   depth::Int
-  hueristic::H
+  rng::Xoshiro
 end
 
-AlphaBeta(depth) = AlphaBeta(depth, nothing)
+AlphaBeta(depth) = AlphaBeta(depth, 
+  Xoshiro(rand(TaskLocalRNG(), UInt8)))
 
 function (ab::AlphaBeta)(st)
   if st.player == 1
-    max_action(st, no_max_action, no_min_action, ab.depth, ab.hueristic)
+    max_action(st, no_max_action, no_min_action, ab.depth, ab)
   else
-    min_action(st, no_max_action, no_min_action, ab.depth, ab.hueristic)
+    min_action(st, no_max_action, no_min_action, ab.depth, ab)
   end
 end
 
 larger_q(a, b) = a.value > b.value ? a : b
 
-function cached_max_action(st::State, depth::Int, cache::Dict, heuristic)
+function cached_max_action(st::State, depth::Int, cache::Dict, mm)
   trans, nst = normalized(st)
   if haskey(cache, nst)
-    result = trans(cache[nst])
-    # printindent("Cached value ")
-    # log_action(st, result)
-    result
-    result
+    trans(cache[nst])
   elseif depth == 0
-    result = trans(ValuedAction(fake_action, approx_val(heuristic, nst)))
-    # printindent("Maxdepth ")
-    # log_action(st, result)
-    result
+    ValuedAction(fake_action, 0f0)
   else
-    best_child = mapreduce(larger_q, smart_actions(nst)) do a
+    best_child = mapreduce(larger_q, smart_actions(mm.rng, nst)) do a
       next_st = @set apply_action(nst, a).player = 2
       if is_terminal(next_st)
         ValuedAction(a.action, 1)
@@ -127,7 +116,7 @@ function cached_max_action(st::State, depth::Int, cache::Dict, heuristic)
         # printindent("Considering ")
         # log_action(nst, a)
         # indent!()
-        child_val = cached_max_action(next_st, depth - 1, cache, heuristic).value
+        child_val = cached_max_action(next_st, depth - 1, cache, mm).value
         # dedent!()
         ValuedAction(a.action, discount * child_val)
       end
@@ -141,14 +130,14 @@ end
 
 struct CachedMinimax{H}
   depth::Int
-  heuristic::H
+  rng::Xoshiro
 end
 
-CachedMinimax(depth) = CachedMinimax(depth, nothing)
+CachedMinimax(depth) = CachedMinimax(depth, nothing, Xoshiro(rand(TaskLocalRNG(), UInt8)))
 
 function (mm::CachedMinimax)(st::State)
   cache = Dict{State, ValuedAction}()
-  cached_max_action(st, mm.depth, cache, mm.heuristic)
+  cached_max_action(st, mm.depth, cache, mm)
 end
 
 function apply_hueristic(st::State, a::Action)::ValuedAction
@@ -161,15 +150,15 @@ function apply_hueristic(st::State, a::Action)::ValuedAction
   end
 end
 
-function shuffled_actions(st)
+function shuffled_actions(rng, st)
   acts = actions(st)
-  Random.shuffle!(acts)
+  Random.shuffle!(rng, acts)
   vacts = ValuedAction[apply_hueristic(st, a) for a in acts]
   sort(vacts; by=a-> abs.(a.value), rev= true, alg=MergeSort) 
 end
 
-function smart_actions(st)
-  acts = shuffled_actions(st)
+function smart_actions(rng, st)
+  acts = shuffled_actions(rng, st)
   if abs(acts[1].value) == 1f0
     acts[1:1]
   else
@@ -177,16 +166,18 @@ function smart_actions(st)
   end
 end
 
-struct Rand end
-
-const rand_players = (Rand(), Rand())
-
-function (::Rand)(st::State)
-  choices = actions(st)
-  ValuedAction(choices[rand(1:length(choices))], 0f0)
+struct Rand
+  rng::Xoshiro
 end
 
-struct Greedy end
+function (r::Rand)(st::State)
+  choices = actions(st)
+  ValuedAction(choices[rand(r.rng, 1:length(choices))], 0f0)
+end
+
+struct Greedy
+  rng::Xoshiro
+end
 
 function (b::Greedy)(st::State)
   acts = actions(st)
@@ -195,7 +186,5 @@ function (b::Greedy)(st::State)
   probs = [player * c.value for c in choices]
   ix = argmax(probs)
   mask = (probs .== probs[ix])
-  rand(choices[mask])
+  rand(b.rng, choices[mask])
 end
-
-const greedy_players = (Greedy(), Greedy())
