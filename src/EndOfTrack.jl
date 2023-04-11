@@ -1,14 +1,13 @@
 module EndOfTrack
 using BSON: @save, @load
 using Lux, NNlib, Zygote, Optimisers, CUDA
-using StaticArrays, Accessors, Random, ArraysOfArrays, Unrolled
+using StaticArrays, Accessors, Random, ArraysOfArrays
 using Functors, StatsBase, DataStructures
 using StatsBase: mean
 using Infiltrator 
 using VisdomLog
 using ThreadTools
 using Unzip
-using LogExpFunctions
 
 include("rules.jl")
 include("util.jl")

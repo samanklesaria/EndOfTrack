@@ -4,20 +4,24 @@
 # Well that's odd. Did he not see the move from (5,6)->(6,8)?
 # What if I cut the number of searches to something tiny: 1k.
 
+next_player(::Nothing) = nothing
+
 function winner_test(st, steps, winner)
-  test_players = [
-    # AlphaBeta(4), 
-    # CachedMinimax(4)
-    TestNoRoll(nothing; st=st, shared=true, temp=50f0)
-  ]
-  for p in test_players
-    println("\n$(typeof(p))")
-    init!(p; state=st)
-    r1 = simulate(st, (p, p), steps=steps + 1, log=true)
-    # @infiltrate r1.winner != winner
-    # if !isnothing(winner)
-    #   @infiltrate r1.steps != steps
-    # end
+  for (st, winner) in [(st, winner)] # , (flip_players(st), next_player(winner))]
+    test_players = [
+      # AlphaBeta(4), 
+      # CachedMinimax(4)
+      TestNoRoll(nothing; st=st, shared=true)
+    ]
+    for p in test_players
+      println("\n$(typeof(p))")
+      init!(p; state=st)
+      r1 = simulate(st, (p, p), steps=steps + 1, log=true)
+      # @infiltrate r1.winner != winner
+      # if !isnothing(winner)
+      #   @infiltrate r1.steps != steps
+      # end
+    end
   end
 end
   
@@ -56,27 +60,27 @@ function test()
   # println("\nAnother 2 step win test")
   # winner_test(st3, 3, 1)
   
-  # st33 = State(2, SVector{2}([
-  #   PlayerState(
-  #     SVector{2}([7,6]),
-  #     SMatrix{2,5}([5 8; 7 6; 2 1; 3 1; 4 1]')),
-  #   PlayerState(
-  #       SVector{2}([4,4]),
-  #       SMatrix{2,5}([4 6; 4 4; 5 4; 6 4; 6 6]'))
-  # ]))
-  # println("\n1 step block test")
-  # winner_test(st33, 2, nothing)
-  
-  st4 = State(2, SVector{2}([
+  st33 = State(2, SVector{2}([
     PlayerState(
       SVector{2}([7,6]),
-      SMatrix{2,5}([3 7; 7 6; 2 1; 3 1; 4 1]')),
+      SMatrix{2,5}([5 8; 7 6; 2 1; 3 1; 4 1]')),
     PlayerState(
         SVector{2}([4,4]),
-        SMatrix{2,5}([3 4; 4 4; 5 4; 6 4; 6 6]'))
+        SMatrix{2,5}([4 6; 4 4; 5 4; 6 4; 6 6]'))
   ]))
-  println("\n2 step block test")
-  winner_test(st4, 0, nothing)
+  println("\n1 step block test")
+  winner_test(st33, 0, nothing) # 2
+  
+  # st4 = State(2, SVector{2}([
+  #   PlayerState(
+  #     SVector{2}([7,6]),
+  #     SMatrix{2,5}([3 7; 7 6; 2 1; 3 1; 4 1]')),
+  #   PlayerState(
+  #       SVector{2}([4,4]),
+  #       SMatrix{2,5}([3 4; 4 4; 5 4; 6 4; 6 6]'))
+  # ]))
+  # println("\n2 step block test")
+  # winner_test(st4, 0, nothing)
         
   # println("\nTerminal state test")
   # unnorm_state = State(2, SVector{2}([

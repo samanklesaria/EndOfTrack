@@ -1,14 +1,5 @@
 # Value functions are from the perspective of the current player
 
-# If we have each node take the AVERAGE of its children rather than the max, 
-# as in the other papers, what policy are we actually learning about?
-# We also don't want to sample children entirely randomly: we want to pick the max.
-
-# Perhaps: when thinking and playing, use a high-ish temperature
-# When computing q values... oh wait. 
-# The classic alg will ADD the new q value to all the parents, and then increase the number
-# So we're not computing the value function for a random policy. We're computing it for the MCTs policy
-
 mutable struct EdgeP{N}
   action::Action
   q::Float32
@@ -33,27 +24,29 @@ const BackEdge = BackEdgeP{Node}
 const ReqChan = Channel{Tuple{Array{Float32, 4}, Channel{Vector{Float32}}}}
 
 function ucb(n::Int, e::Edge)
-  bonus = 4 * (log(n) / e.n)
-  e.q + sqrt(bonus)
+  bonus = 8 * (log(n) / e.n)
+  (e.q / e.n) + sqrt(bonus)
 end
 
-ValuedAction(n::Node, e::EdgeP) = ValuedAction(e.action, ucb(n.counts, e))
+ucb_action(n::Node, e::EdgeP) = ValuedAction(e.action, ucb(n.counts, e))
+
+q_action(e::EdgeP) = ValuedAction(e.action, e.q / e.n)
 
 mutable struct NoRollP{R,T}
   root::Node
   steps::Int
   task_chans::Vector{T}
-  temp::Float32
   shared::Bool
   req::R
+  seen::UInt16
 end
 
-function NoRollP{R, T}(req::R; steps=1_600, temp=1f-5, shared=false,
+function NoRollP{R, T}(req::R; steps=1_600, shared=false,
     tasks=1, st=start_state) where {R,T}
   val_chans = [T() for _ in 1:tasks]
   gpucom = gpu_com(req, val_chans[1])
-  root = init_state!(nothing, st, gpucom, temp)
-  NoRollP{R,T}(root, steps, val_chans, temp, shared, req) 
+  root = init_state!(nothing, st, gpucom)
+  NoRollP{R,T}(root, steps, val_chans, shared, req, 0) 
 end
 
 const NoRoll = NoRollP{ReqChan, Channel{Vector{Float32}}}
@@ -70,18 +63,17 @@ function opponent_moved!(nr::NoRollP, action)
   end
 end
 
-softmaximum(qs, t) = sum(qs .* LogExpFunctions.softmax(qs .* t))
-
-function backprop!(node::Node, temp::Float32)
+function backprop!(node::Node, n::Int, q::Float32)
   back = node.parent
   while !isnothing(back)
     parent_node = back.node
     edge = parent_node.edges[back.ix]
-    edge.n += 1
-    parent_node.counts += 1
-    edge.q = softmaximum(Float32[-e.q for e in node.edges], temp)
+    edge.n += n
+    parent_node.counts += n
+    edge.q += q
     node = parent_node
     back = node.parent
+    q = -q
   end
 end
 
@@ -91,8 +83,12 @@ struct GPUCom
   val_chan::Channel{Vector{Float32}}
 end
 
+# Using the sum of the edges instead of picking them
+# individually will bias us towards moves that give us many next options
+
+
 function init_state!(parent::Union{Nothing, BackEdge},
-    st::State, gpucom::Union{GPUCom, Nothing}, temp::Float32)
+    st::State, gpucom::Union{GPUCom, Nothing})
   acts = actions(st)
   next_sts = next_state.(Ref(st), acts)
   winning_ix = findfirst(is_terminal.(next_sts))
@@ -105,24 +101,25 @@ function init_state!(parent::Union{Nothing, BackEdge},
   node = Node(length(edges), edges, parent)
   if !isnothing(parent)
     parent.node.edges[parent.ix].dest = node
-    backprop!(node, temp)
+    backprop!(node, length(edges), -sum(e.q for e in edges))
   end
   node
 end
 
-function explore_next_state!(nr::NoRollP, node::Node, st::State,
+function explore_next_state!(node::Node, st::State,
     gpucom::Union{GPUCom, Nothing})
   while true
     ucbs = Float32[ucb(node.counts, e) for e in node.edges]
-    ix = wsample(1:length(ucbs), LogExpFunctions.softmax(ucbs .* nr.temp))
-    # log_action(st, ValuedAction(node, node.edges[ix]))
+    ix = argmax(ucbs)
+    # log_action(st, ucb_action(node, node.edges[ix]))
     next_st = @set apply_action(st, node.edges[ix].action).player = next_player(st.player)
     if is_terminal(next_st)
       node.edges[ix].n += 1
-      backprop!(node, nr.temp)
+      node.edges[ix].q += 1
+      backprop!(node, 1, -1f0)
       return nothing
     elseif isnothing(node.edges[ix].dest)
-      init_state!(BackEdge(ix, node), next_st, gpucom, nr.temp)
+      init_state!(BackEdge(ix, node), next_st, gpucom)
       return nothing
     else
       node = node.edges[ix].dest
@@ -138,12 +135,18 @@ gpu_com(::Nothing, _) = nothing
 # pool = Semaphore(nr.steps)
 # maintaining the error handling property? Would need to implement that. 
 
+# Sampling based on the amount of visits makes some sense. And I
+# think that's what we actually had in the paper. 
+# But this would bias us towards trajectories with many possible actions.
+# Maybe that's okay? How does the original stuff do it? 
+
 function (nr::NoRollP)(st::State)
+  nr.seen += 1
   chan = Channel{Nothing}(0)
   @sync begin
     for task_chan in nr.task_chans
       t = @async for _ in chan
-        explore_next_state!(nr, nr.root, st, gpu_com(nr.req, task_chan))
+        explore_next_state!(nr.root, st, gpu_com(nr.req, task_chan))
         # println("")
       end
       bind(chan, t)
@@ -157,11 +160,15 @@ function (nr::NoRollP)(st::State)
   indent!()
   for e in nr.root.edges
     printindent("")
-    log_action(st, ValuedAction(e.action, e.q))
+    log_action(st, q_action(e))
   end
   dedent!()
-  vals = Float32[e.q for e in nr.root.edges]
-  ix = wsample(1:length(vals), LogExpFunctions.softmax(vals .* (nr.temp + 1)))
+  vals = Float32[(e.q / e.n) for e in nr.root.edges]
+  if nr.seen >= 30
+    ix = argmax(vals)
+  else
+    ix = wsample(1:length(vals), (vals .+ 1))
+  end
   chosen = ValuedAction(nr.root.edges[ix].action, vals[ix])
   root = nr.root.edges[ix].dest
   if !isnothing(root)

@@ -178,7 +178,6 @@ function validate_noroll(req::ReqChan, seed::UInt8)
     game_q(simulate(start_state, players))
 end
 
-# TODO: raise the temperature
 # Remove explicit RNGs (as tasks have separate rngs anyways)
 # Don't use pics in the replay buffer, as they take too much space.
 
