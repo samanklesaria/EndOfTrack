@@ -123,12 +123,12 @@ function cached_max_action(st::State, depth::Int, cache::Dict, mm)
   end
 end
 
-struct CachedMinimax{H}
+struct CachedMinimax
   depth::Int
   rng::Xoshiro
 end
 
-CachedMinimax(depth) = CachedMinimax(depth, nothing, Xoshiro(rand(TaskLocalRNG(), UInt8)))
+CachedMinimax(depth) = CachedMinimax(depth, Xoshiro(rand(TaskLocalRNG(), UInt8)))
 
 function (mm::CachedMinimax)(st::State)
   cache = Dict{State, ValuedAction}()

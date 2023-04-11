@@ -45,12 +45,12 @@ end
 function approx_vals(st::Vector{State}, coms::GPUCom)
   trans, nst = unzip(normalize_player.(st))
   batch = cat4(as_pic.(nst))
-  println("<$(size(batch, 4))")
   put!(coms.req_chan, (batch, coms.val_chan))
   vals = trans .* take!(coms.val_chan)
-  println(">")
   vals
 end
+
+approx_vals(st::Vector{State}, ::Nothing) = zeros(Float32, length(st))
 
 cat4(stack) = reduce((x,y)->cat(x,y; dims=4), stack)
 
@@ -58,11 +58,10 @@ function evaluator(net, coms::ReqChan, newparams::NewParams)
   cpu_ps, cpu_st = newparams.n
   @atomic newparams.n = nothing
   ps, st = gpu(cpu_ps), gpu(Lux.testmode(cpu_st))
-  println("Initialized evaluator")
   while true
     if !isnothing(newparams.n)
       cpu_ps, cpu_st = newparams.n
-      ps, st = gpu(cpu_ps), gpu(testmode(cpu_st))
+      ps, st = gpu(cpu_ps), gpu(Lux.testmode(cpu_st))
     end
     if coms.n_avail_items > 0
       pics, outs = unzip([take!(coms) for _ in 1:coms.n_avail_items])
@@ -76,10 +75,8 @@ function evaluator(net, coms::ReqChan, newparams::NewParams)
         @assert length(vals) == sizes[i]
         put!(out, vals)
       end
-      println("Bach eval on $(Threads.threadid()) complete")
     else
-      println("Not enough to process ($(coms.n_avail_items))")
-      sleep(1)
+      sleep(0.001)
     end
   end
 end
@@ -92,7 +89,7 @@ end
 function as_pics(game::GameResult)
   nsts, values = with_values(game)
   stack = as_pic.(nsts)
-  cat4(stack), values
+  stack, values
 end
 
 function with_values(game::GameResult)
@@ -122,7 +119,7 @@ function noroll_player(buffer_chan::Channel{ReplayBuffer}, coms::ReqChan)
     gameres = GameResult(game_q(result), result.states)
     println("Finished game on $(Threads.threadid())")
     pics, values = as_pics(gameres)
-    pics2 = cat4(as_pic.(map_state.(Ref(flip_pos_vert), gameres.states)))
+    pics2 = as_pic.(map_state.(Ref(flip_pos_vert), gameres.states))
     buffer = take!(buffer_chan)
     append!(buffer, zip(pics, values))
     append!(buffer, zip(pics2, values))
@@ -133,7 +130,6 @@ end
 function noroll_trainer(net, cpu_ps, cpu_st, newparams::Vector{NewParams},
     buffer_chan::Channel{ReplayBuffer}, req_chan::ReqChan)
   seed = rand(TaskLocalRNG(), UInt8)
-  validate_com = GPUCom(req_chan, Channel{Vector{Float32}}(0))
   println("Started trainer loop")
   vd=Visdom("noroll")
   st, ps = (gpu(Lux.trainmode(cpu_st)), gpu(cpu_ps))
@@ -163,7 +159,7 @@ function noroll_trainer(net, cpu_ps, cpu_st, newparams::Vector{NewParams},
         for newparam in newparams
           @atomic newparam.n = (cpu(ps), cpu(st))
         end
-        val_q = validate_noroll(validate_com, seed)
+        val_q = validate_noroll(req_chan, seed)
         report(vd, "validation", ix, val_q; log=false, scatter=true)
         report(vd, "weights", fleaves(ps))
       end
@@ -171,7 +167,7 @@ function noroll_trainer(net, cpu_ps, cpu_st, newparams::Vector{NewParams},
     else
       println("Not enough to train")
       put!(buffer_chan, buffer)
-      sleep(5)
+      sleep(10)
     end
   end 
 end
@@ -186,8 +182,8 @@ function game_q(result)
   end
 end
 
-function validate_noroll(com::GPUCom, seed::UInt8)
-    players = (make_noroll(com; shared=false), AlphaBeta(5, Xoshiro(seed)))
+function validate_noroll(coms::ReqChan, seed::UInt8)
+    players = (make_noroll(coms; shared=false), AlphaBeta(5, Xoshiro(seed)))
     game_q(simulate(start_state, players))
 end
 

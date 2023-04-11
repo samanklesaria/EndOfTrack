@@ -3,9 +3,9 @@
 
 function winner_test(st, steps, winner)
   test_players = [
-    AlphaBeta(4), 
-    NoRoll(estimator=nothing),
-    CachedMinimax(4)
+    # AlphaBeta(4), 
+    # CachedMinimax(4)
+    NoRoll(req=nothing, shared=true, temp=50f0)
   ]
   for p in test_players
     println("\n$(typeof(p))")
