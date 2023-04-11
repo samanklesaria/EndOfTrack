@@ -68,3 +68,13 @@ end
 flip(f) = (a,b)-> f(b,a)
 
 fleaves(a; f=identity, t=Float32, leaf=Functors.isleaf) = foldmap(f, append!, Vector{t}(), a; exclude=leaf)
+
+# using Plots
+# function plot_state(st::State)
+#   scatter(st.positions[1].pieces[1, :],
+#     st.positions[1].pieces[2, :])
+#   scatter!(st.positions[1].ball[1:1], st.positions[1].ball[2:2])
+#   scatter!(st.positions[2].pieces[1,:],
+#     st.positions[2].pieces[2, :])
+#   scatter!(st.positions[2].ball[1:1], st.positions[2].ball[2:2])
+# end

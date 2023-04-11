@@ -50,6 +50,12 @@ function normalize_player(st)
   end
 end
 
+# For data augmentation with the nn
+function flip_players(st) 
+    st = map_state(flip_pos_hor, st)
+    State(next_player(st.player), reverse(st.positions))
+end
+
 struct Transformation
   action_map::Vector{GroupElt}
   value_map::Int

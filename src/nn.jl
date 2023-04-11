@@ -42,19 +42,18 @@ mutable struct NewParams{P}
   @atomic n::Union{Nothing, P}
 end
 
-function approx_vals(st::Vector{State}, coms::GPUCom)
+function approx_vals(st::Vector{State}, gpucom::GPUCom)
   trans, nst = unzip(normalize_player.(st))
   batch = cat4(as_pic.(nst))
-  put!(coms.req_chan, (batch, coms.val_chan))
-  vals = trans .* take!(coms.val_chan)
-  vals
+  put!(gpucom.req_chan, (batch, gpucom.val_chan))
+  trans .* take!(gpucom.val_chan)
 end
 
 approx_vals(st::Vector{State}, ::Nothing) = zeros(Float32, length(st))
 
 cat4(stack) = reduce((x,y)->cat(x,y; dims=4), stack)
 
-function evaluator(net, coms::ReqChan, newparams::NewParams)
+function evaluator(net, req::ReqChan, newparams::NewParams)
   cpu_ps, cpu_st = newparams.n
   @atomic newparams.n = nothing
   ps, st = gpu(cpu_ps), gpu(Lux.testmode(cpu_st))
@@ -63,8 +62,8 @@ function evaluator(net, coms::ReqChan, newparams::NewParams)
       cpu_ps, cpu_st = newparams.n
       ps, st = gpu(cpu_ps), gpu(Lux.testmode(cpu_st))
     end
-    if coms.n_avail_items > 0
-      pics, outs = unzip([take!(coms) for _ in 1:coms.n_avail_items])
+    if req.n_avail_items > 0
+      pics, outs = unzip([take!(req) for _ in 1:req.n_avail_items])
       sizes = size.(pics, 4)
       cumsizes = [0; cumsum(sizes)]
       println("Evaluating $(length(pics)) on $(Threads.threadid())")
@@ -100,19 +99,9 @@ function with_values(game::GameResult)
   nsts, values
 end
 
-function make_noroll(coms::ReqChan; shared=true)
-  nr = NoRoll(shared=shared, req=coms)
-  println("Making noroll")
-  gpucom = GPUCom(coms, nr.task_chans[1])
-  node = init_state!(nr, nothing, start_state, gpucom)
-  nr.root[] = node
-  println("Done making noroll")
-  nr
-end
-
-function noroll_player(buffer_chan::Channel{ReplayBuffer}, coms::ReqChan)
+function noroll_player(buffer_chan::Channel{ReplayBuffer}, req::ReqChan)
   while true
-    noroll = make_noroll(coms)
+    noroll = NoRoll(req; shared=true)
     players = (noroll, noroll)
     println("Starting game on thread $(Threads.threadid())")
     result = simulate(start_state, players; track=true)
@@ -120,15 +109,17 @@ function noroll_player(buffer_chan::Channel{ReplayBuffer}, coms::ReqChan)
     println("Finished game on $(Threads.threadid())")
     pics, values = as_pics(gameres)
     pics2 = as_pic.(map_state.(Ref(flip_pos_vert), gameres.states))
+    pics3 = as_pic.(flip_players.(gameres.states))
     buffer = take!(buffer_chan)
     append!(buffer, zip(pics, values))
     append!(buffer, zip(pics2, values))
+    append!(buffer, zip(pics3, -values))
     put!(buffer_chan, buffer)
   end
 end
 
 function noroll_trainer(net, cpu_ps, cpu_st, newparams::Vector{NewParams},
-    buffer_chan::Channel{ReplayBuffer}, req_chan::ReqChan)
+    buffer_chan::Channel{ReplayBuffer}, req::ReqChan)
   seed = rand(TaskLocalRNG(), UInt8)
   println("Started trainer loop")
   vd=Visdom("noroll")
@@ -159,7 +150,7 @@ function noroll_trainer(net, cpu_ps, cpu_st, newparams::Vector{NewParams},
         for newparam in newparams
           @atomic newparam.n = (cpu(ps), cpu(st))
         end
-        val_q = validate_noroll(req_chan, seed)
+        val_q = validate_noroll(req, seed)
         report(vd, "validation", ix, val_q; log=false, scatter=true)
         report(vd, "weights", fleaves(ps))
       end
@@ -182,39 +173,41 @@ function game_q(result)
   end
 end
 
-function validate_noroll(coms::ReqChan, seed::UInt8)
-    players = (make_noroll(coms; shared=false), AlphaBeta(5, Xoshiro(seed)))
+function validate_noroll(req::ReqChan, seed::UInt8)
+    players = (init!(NoRoll(req; shared=false)), AlphaBeta(5, Xoshiro(seed)))
     game_q(simulate(start_state, players))
 end
 
 # TODO: raise the temperature
+# Remove explicit RNGs (as tasks have separate rngs anyways)
+# Don't use pics in the replay buffer, as they take too much space.
 
 function noroll_train_loop()
   # Threads.nthreads() - 1
   net, st, ps = make_net()
   buffer_chan = Channel{ReplayBuffer}(1)
-  coms = ReqChan(EVAL_BATCH_SIZE)
-  put!(buffer_chan, ReplayBuffer(300_000))
+  req = ReqChan(EVAL_BATCH_SIZE)
+  put!(buffer_chan, ReplayBuffer(500_000))
   # @threads :static for i in 1:N
   newparams = NewParams[NewParams((ps, st)) for _ in 1:1]
   @sync begin
       t = @async begin
         device!(1)
-        noroll_trainer(net, ps, st, newparams, buffer_chan, coms)
+        noroll_trainer(net, ps, st, newparams, buffer_chan, req)
       end
-      bind(coms, t); bind(buffer_chan, t)
+      bind(req, t); bind(buffer_chan, t)
       errormonitor(t)
       for i in 1:1
         t = @async begin
           device!(1 + $i)
-          evaluator(net, coms, newparams[$i])
+          evaluator(net, req, newparams[$i])
         end
-        bind(coms, t); bind(buffer_chan, t)
+        bind(req, t); bind(buffer_chan, t)
         errormonitor(t)
       end
       for _ in 1:1
-        t = @async noroll_player(buffer_chan, coms)
-        bind(coms, t); bind(buffer_chan, t)
+        t = @async noroll_player(buffer_chan, req)
+        bind(req, t); bind(buffer_chan, t)
         errormonitor(t)
       end
   end

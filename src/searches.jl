@@ -7,6 +7,8 @@ const fake_action = (0, @SVector zeros(2))
 const no_min_action = ValuedAction(fake_action, 1 + eps)
 const no_max_action = ValuedAction(fake_action, -1 - eps)
 
+init!(::Any; state=start_state) = nothing
+
 function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth, ab)
   if depth == 0
     return ValuedAction(fake_action, 0f0)
