@@ -7,11 +7,6 @@ const fake_action = (0, @SVector zeros(2))
 const no_min_action = ValuedAction(fake_action, 1 + eps)
 const no_max_action = ValuedAction(fake_action, -1 - eps)
 
-function will_win(st::State, a::Action)
-  new_st = apply_action(st, a)
-  is_terminal(new_st)
-end
-
 function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth, ab)
   if depth == 0
     return ValuedAction(fake_action, 0f0)

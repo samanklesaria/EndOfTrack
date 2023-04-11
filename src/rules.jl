@@ -184,6 +184,10 @@ function apply_action(st::State, (pieceix, pos)::Action)
   end
 end
 
+function next_state(st::State, a::Action)
+  @set apply_action(st, a).player = next_player(st.player)
+end
+
 struct EndState
   winner::Union{Int8, Nothing}
   st::State
@@ -191,28 +195,27 @@ struct EndState
   states::Vector{State}
 end
 
-function simulate(st::State, players; steps=150, log=false, track=false)
-  player_ixs = st.player == 1 ? (0=>1,1=>2) : (0=>2,1=>1)
-  simulate_(st, players, player_ixs, steps ÷ 2, log, track)
-end
+opponent_moved!(player, action) = nothing
 
-@unroll function simulate_(st::State, players, player_ixs, steps, log, track)
+function simulate(st::State, players; steps=150, log=false, track=false)
   states = Vector{State}()
-  for nsteps in 0:steps
-    @unroll for (substep, player) in player_ixs
-      st = @set st.player = player
-      if is_terminal(st)
-        return EndState(next_player(player), st, 2 * nsteps + substep, states)
-      end
-      action = players[player](st)
+  if track
+    sizehint!(states, steps)
+  end
+  for nsteps in 1:steps
+      a = players[st.player](st)
       if log
-        log_action(st, action)
+        log_action(st, a)
       end
-      st = apply_action(st, action)
+      st = apply_action(st, a)
+      if is_terminal(st)
+        return EndState(st.player, st, nsteps, states)
+      end
+      st = @set st.player = next_player(st.player)
+      opponent_moved!(players[st.player], a)
       if track
         push!(states, st)
       end
-    end
   end
   return EndState(nothing, st, steps, states)
 end

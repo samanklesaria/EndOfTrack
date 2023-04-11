@@ -9,16 +9,13 @@ using VisdomLog
 using ThreadTools
 using Unzip
 using LogExpFunctions
-using HDF5
-using MLUtils
-using Serialization
 
 include("rules.jl")
 include("util.jl")
 include("searches.jl")
 include("groupops.jl")
-include("nn.jl")
 include("noroll.jl")
+include("nn.jl")
 include("tests.jl")
 # include("gui.jl")
 
