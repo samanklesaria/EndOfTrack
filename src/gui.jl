@@ -1,4 +1,4 @@
-using GLMakie
+using GLMakie, ArraysOfArrays
 
 const FPos = SVector{2, Float32}
 

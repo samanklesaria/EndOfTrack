@@ -1,8 +1,20 @@
+using TensorBoardLogger, Logging
+
 const TRAIN_BATCH_SIZE = 64
 const EVAL_BATCH_SIZE = 64
 
 # TODO: if we encoded the positions, our replay buffer would
 # take half the space.
+
+# With validation turned on, playoffs between AlphaBeta
+# and NoRoll get invalid states. Why?
+
+# How is it possible to have the parent node use a Dirac
+# distribution?
+# Could this be some strange concurrency issue?
+
+# Note: Doesn't use all CPUs allocated, meaning we
+# should add a second evaluator thread
 
 const ReplayBuffer = CircularBuffer{Tuple{State, Float32}}
 
@@ -118,46 +130,47 @@ function noroll_trainer(net, cpu_ps, cpu_st, newparams::Vector{NewParams},
     buffer_chan::Channel{ReplayBuffer}, req::ReqChan)
   seed = rand(TaskLocalRNG(), UInt8)
   println("Started trainer loop")
-  vd=Visdom("noroll")
   st, ps = (gpu(Lux.trainmode(cpu_st)), gpu(cpu_ps))
   opt = OptimiserChain(WeightDecay(1f-4),
     ClipGrad(1.0), Optimisers.AdaBelief(1f-4))
   st_opt = Optimisers.setup(opt, ps)
-  for ix in Iterators.countfrom()
-    buffer = take!(buffer_chan)
-    l = length(buffer)
-    if l >= TRAIN_BATCH_SIZE
-      ixs = sample(1:l, TRAIN_BATCH_SIZE)
-      batch = buffer[ixs]
-      put!(buffer_chan, buffer)
-      nsts, values = unzip(batch)
-      pic_batch = gpu(cat4(as_pic.(nsts)))
-      loss, grad = withgradient(ps) do ps
-        q_pred, st = Lux.apply(net, pic_batch, ps, st)
-        mean(abs2.(q_pred .- gpu(values)))
-      end
-      st_opt, ps = Optimisers.update!(st_opt, ps, grad[1])
-      if ix % 10 == 9
-        report(vd, "loss", ix, loss)
-      end
-      if ix % 1000 == 1
-        @save "noroll-checkpoint.bson" ps
-        println("Saved")
-        cpu_params = (cpu(ps), cpu(st))
-        for newparam in newparams
-          @atomic newparam.n = cpu_params
+  lg=TBLogger("runs", min_level=Logging.Info)
+  with_logger(lg) do
+    for ix in Iterators.countfrom()
+      buffer = take!(buffer_chan)
+      l = length(buffer)
+      if l >= TRAIN_BATCH_SIZE
+        ixs = sample(1:l, TRAIN_BATCH_SIZE)
+        batch = buffer[ixs]
+        put!(buffer_chan, buffer)
+        nsts, values = unzip(batch)
+        pic_batch = gpu(cat4(as_pic.(nsts)))
+        loss, grad = withgradient(ps) do ps
+          q_pred, st = Lux.apply(net, pic_batch, ps, st)
+          mean(abs2.(q_pred .- gpu(values)))
         end
-        val_q = validate_noroll(req, seed)
-        println("About to validate weights")
-        report(vd, "validation", ix, val_q; log=false, scatter=true)
-        report(vd, "weights", fleaves(cpu_params[1]))
+        st_opt, ps = Optimisers.update!(st_opt, ps, grad[1])
+        if ix % 10 == 9
+          @info "trainer" loss
+        end
+        if ix % 1000 == 999
+          @save "noroll-checkpoint.bson" ps
+          println("Saved")
+          cpu_params = (cpu(ps), cpu(st))
+          for newparam in newparams
+            @atomic newparam.n = cpu_params
+          end
+          valq = validate_noroll(req, seed)
+          println("Validating")
+          @info "validate" valq
+        end
+      else
+        println("Not enough to train")
+        put!(buffer_chan, buffer)
+        sleep(10)
       end
-    else
-      println("Not enough to train")
-      put!(buffer_chan, buffer)
-      sleep(10)
-    end
-  end 
+    end 
+  end
 end
 
 function game_q(result)
@@ -174,55 +187,6 @@ function validate_noroll(req::ReqChan, seed::UInt8)
     players = (NoRoll(req; shared=false), AlphaBeta(5, Xoshiro(seed)))
     game_q(simulate(start_state, players))
 end
-
-function validate_noroll2(seed::UInt8)
-  players = (TestNoRoll(nothing; shared=false), AlphaBeta(5, Xoshiro(seed)))
-  game_q(simulate(start_state, players))
-end
-
-function why_segfault()
-    vd=Visdom("noroll")
-    seed = UInt8(8)
-    val_q = validate_noroll2(seed)
-    report(vd, "validation", 1, val_q; log=false, scatter=true)
-end
-
-# Remove explicit RNGs (as tasks have separate rngs anyways)
-
-# Ah: binds won't work here, because the evaluator doesn't wait. 
-# We we need to make some kind of 'stop please' flag
-
-
-# function noroll_train_loop()
-#   # Threads.nthreads() - 1
-#   net, st, ps = make_net()
-#   buffer_chan = Channel{ReplayBuffer}(1)
-#   req = ReqChan(EVAL_BATCH_SIZE)
-#   put!(buffer_chan, ReplayBuffer(800_000))
-#   # @threads :static for i in 1:N
-#   newparams = NewParams[NewParams((ps, st)) for _ in 1:1]
-#   @sync begin
-#       # t = @async begin
-#       #   device!(1)
-#       #   noroll_trainer(net, ps, st, newparams, buffer_chan, req)
-#       # end
-#       # bind(req, t); bind(buffer_chan, t)
-#       # errormonitor(t)
-#       for i in 1:1
-#         t = @async begin
-#           device!(1 + $i)
-#           evaluator(net, req, newparams[$i])
-#         end
-#         bind(buffer_chan, t)
-#         errormonitor(t)
-#       end
-#       for _ in 1:3
-#         t = @async noroll_player(buffer_chan, req)
-#         bind(buffer_chan, t)
-#         errormonitor(t)
-#       end
-#   end
-# end
 
 function noroll_train_loop()
   N = Threads.nthreads() - 1
