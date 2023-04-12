@@ -140,7 +140,7 @@ function noroll_trainer(net, cpu_ps, cpu_st, newparams::Vector{NewParams},
       if ix % 10 == 9
         report(vd, "loss", ix, loss)
       end
-      if ix % 1000 == 999
+      if ix % 1000 == 1
         @save "noroll-checkpoint.bson" ps
         println("Saved")
         cpu_params = (cpu(ps), cpu(st))
@@ -148,6 +148,7 @@ function noroll_trainer(net, cpu_ps, cpu_st, newparams::Vector{NewParams},
           @atomic newparam.n = cpu_params
         end
         val_q = validate_noroll(req, seed)
+        println("About to validate weights")
         report(vd, "validation", ix, val_q; log=false, scatter=true)
         report(vd, "weights", fleaves(cpu_params[1]))
       end
