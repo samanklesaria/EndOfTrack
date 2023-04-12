@@ -116,7 +116,11 @@ function assert_valid_state(st::State)
     encoded = encode(st.positions[i].pieces)
     @assert length(encoded) == length(unique(encoded))
     ball_pos = encode(st.positions[i].ball[:, na])
-    @assert ball_pos[1] in encoded
+    if !(ball_pos[1] in encoded)
+      println("Ball pos ", ball_pos)
+      println("Encoded ", encoded)
+      @assert false
+    end
     @assert all(st.positions[i].pieces .>= 1)
     @assert all(st.positions[i].pieces .<= limits[:, na])
   end
