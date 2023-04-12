@@ -92,10 +92,8 @@ function as_pics(game::GameResult)
 end
 
 function with_values(game::GameResult)
-  multipliers = [1; cumprod(fill(discount, length(game.states) - 1))]
-  reverse!(multipliers)
   trans, nsts = unzip(normalize_player.(game.states))
-  values = multipliers .* trans .* game.value
+  values = trans .* game.value
   nsts, values
 end
 
@@ -181,12 +179,18 @@ end
 # Remove explicit RNGs (as tasks have separate rngs anyways)
 # Don't use pics in the replay buffer, as they take too much space.
 
+# Start with all your threads doing alphaBeta for 30 steps. Save them to a buffer.
+# Then, the runners should sample something from the buffer, and then
+# save something to the same place in the buffer when they're done. 
+
+# To start, let's just see if we can run a single noroll loop
+
 function noroll_train_loop()
   # Threads.nthreads() - 1
   net, st, ps = make_net()
   buffer_chan = Channel{ReplayBuffer}(1)
   req = ReqChan(EVAL_BATCH_SIZE)
-  put!(buffer_chan, ReplayBuffer(500_000))
+  put!(buffer_chan, ReplayBuffer(100_000))
   # @threads :static for i in 1:N
   newparams = NewParams[NewParams((ps, st)) for _ in 1:1]
   @sync begin
