@@ -12,9 +12,13 @@ const EVAL_BATCH_SIZE = 64
 # How is it possible to have the parent node use a Dirac
 # distribution?
 # Could this be some strange concurrency issue?
+# To debug:
+# - Try running validation matchups without gpu for a while:
+# see if anything breaks
 
 # Note: Doesn't use all CPUs allocated, meaning we
 # should add a second evaluator thread
+
 
 const ReplayBuffer = CircularBuffer{Tuple{State, Float32}}
 
@@ -86,7 +90,6 @@ function evaluator(net, req::ReqChan, newparams::NewParams)
       values, _ = Lux.apply(net, batch, ps, st)
       for (i, out) in enumerate(outs)
         vals = cpu(values[(cumsizes[i] + 1):cumsizes[i+1]])
-        @assert length(vals) == sizes[i]
         put!(out, vals)
       end
     else
@@ -173,6 +176,29 @@ function noroll_trainer(net, cpu_ps, cpu_st, newparams::Vector{NewParams},
   end
 end
 
+function problem_solver(req)
+  rng = Xoshiro(UInt8(200))
+  while true
+    print(".")
+    players = (NoRoll(req; shared=false), AlphaBeta(4, rng))
+    simulate(start_state, players)
+  end
+end
+
+function problem2()
+  net, st, ps = make_net()
+  req = ReqChan(EVAL_BATCH_SIZE)
+  newparams = NewParams[NewParams((ps, st)) for _ in 1:1]
+  Threads.@threads :static for i in 1:4
+      if i == 1
+        device!(3)
+        evaluator(net, req, newparams[i])
+      else
+        problem_solver(req)
+      end
+  end
+end
+
 function game_q(result)
   if isnothing(result.winner)
     q = 0f0
@@ -195,12 +221,12 @@ function noroll_train_loop()
   req = ReqChan(EVAL_BATCH_SIZE)
   put!(buffer_chan, ReplayBuffer(1_000_000))
   newparams = NewParams[NewParams((ps, st)) for _ in 1:2]
-  @threads :static for i in 1:N
+  Threads.@threads :static for i in 1:N
       if i == 1
         device!(1)
         noroll_trainer(net, ps, st, newparams, buffer_chan, req)
       elseif i == 2
-        device!(2)
+        device!(3)
         evaluator(net, req, newparams[i])
       else
         noroll_player(buffer_chan, req)

@@ -5,7 +5,7 @@ using StaticArrays, Accessors, Random
 using Functors, StatsBase, DataStructures
 using StatsBase: mean
 using Infiltrator 
-using ThreadTools
+# using ThreadTools
 using Unzip
 
 include("rules.jl")
