@@ -44,9 +44,10 @@ const NoRoll = NoRollP{ReqChan, Channel{Vector{Float32}}}
 
 const TestNoRoll = NoRollP{Nothing,Nothing}
 
-function opponent_moved!(nr::NoRollP, action)
+function opponent_moved!(nr::NoRollP, action::Action)
   if !nr.shared
     ix = findfirst(e-> e.action == action, nr.root.edges)
+    @infiltrate isnothing(ix)
     dest = nr.root.edges[ix].dest
     if !isnothing(dest)
       nr.root = dest 

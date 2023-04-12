@@ -13,7 +13,7 @@ struct PlayerState
 end
 
 struct State
-  player::Int
+  player::UInt8
   positions::SVector{2, PlayerState}
 end
 
@@ -101,7 +101,7 @@ function ball_actions(st::State)
   Action[(UInt8(6), p) for p in passes]
 end
 
-next_player(player::Int) = (1 ⊻ (player - 1)) + 1
+next_player(player::Integer) = (1 ⊻ (player - 1)) + 1
 
 const Dir = Pos
 
@@ -195,7 +195,7 @@ struct EndState
   states::Vector{State}
 end
 
-opponent_moved!(player, action) = nothing
+opponent_moved!(player, action::Action) = nothing
 
 function simulate(st::State, players; steps=150, log=false, track=false)
   states = Vector{State}()
@@ -212,7 +212,7 @@ function simulate(st::State, players; steps=150, log=false, track=false)
         return EndState(st.player, st, nsteps, states)
       end
       st = @set st.player = next_player(st.player)
-      opponent_moved!(players[st.player], a)
+      opponent_moved!(players[st.player], a.action)
       if track
         push!(states, st)
       end
