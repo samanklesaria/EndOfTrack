@@ -27,7 +27,8 @@ function make_net()
     Conv((3,3), 16=>16, relu),
     BatchNorm(16),
     FlattenLayer(),
-    Dense(32, 1, tanh)])
+    Dense(32, 1, tanh),
+    WrappedFunction(x->clamp.(x, -0.95, 0.95))])
   rng = Random.default_rng()
   ps, st = Lux.setup(rng, net)
   if isfile("checkpoint.bson")
@@ -66,7 +67,7 @@ function evaluator(net, req::ReqChan, newparams::NewParams)
       pics, outs = unzip([take!(req) for _ in 1:req.n_avail_items])
       sizes = size.(pics, 4)
       cumsizes = [0; cumsum(sizes)]
-      println("Evaluating $(length(pics)) on $(Threads.threadid())")
+      # println("Evaluating $(length(pics)) on $(Threads.threadid())")
       batch = gpu(cat4(pics))
       values, _ = Lux.apply(net, batch, ps, st)
       for (i, out) in enumerate(outs)
@@ -75,7 +76,8 @@ function evaluator(net, req::ReqChan, newparams::NewParams)
         put!(out, vals)
       end
     else
-      sleep(0.001)
+      print("Empty evaluation queue")
+      sleep(0.1)
     end
   end
 end
@@ -194,12 +196,12 @@ function noroll_train_loop()
   # @threads :static for i in 1:N
   newparams = NewParams[NewParams((ps, st)) for _ in 1:1]
   @sync begin
-      t = @async begin
-        device!(1)
-        noroll_trainer(net, ps, st, newparams, buffer_chan, req)
-      end
-      bind(req, t); bind(buffer_chan, t)
-      errormonitor(t)
+      # t = @async begin
+      #   device!(1)
+      #   noroll_trainer(net, ps, st, newparams, buffer_chan, req)
+      # end
+      # bind(req, t); bind(buffer_chan, t)
+      # errormonitor(t)
       for i in 1:1
         t = @async begin
           device!(1 + $i)

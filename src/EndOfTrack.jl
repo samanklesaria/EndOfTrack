@@ -1,6 +1,6 @@
 module EndOfTrack
 using BSON: @save, @load
-using Lux, NNlib, Zygote, Optimisers, CUDA
+using Lux, NNlib, Zygote, Optimisers, CUDA, Distributions
 using StaticArrays, Accessors, Random, ArraysOfArrays
 using Functors, StatsBase, DataStructures
 using StatsBase: mean
@@ -13,6 +13,7 @@ include("rules.jl")
 include("util.jl")
 include("searches.jl")
 include("groupops.jl")
+include("dists.jl")
 include("noroll.jl")
 include("nn.jl")
 include("tests.jl")
