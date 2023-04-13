@@ -19,7 +19,7 @@ function Base.rand(rng::AbstractRNG, d::ValPrior)
   ns = d.m2 - aux
   b = 0.5 + 0.5 * (ns + (aux / lam))
   tau = rand(rng, Gamma(a, b))
-  rand(rng, Normal(mu,  1 / tau))
+  rand(rng, truncated(Normal(mu,  1 / tau), lower=-1, upper=1))
 end
 
 StatsBase.mean(d::ValPrior) = d.m1 / d.n

@@ -101,6 +101,9 @@ function explore_next_state!(node::Node, st::State,
     samples = Float32[rand(e.dist) for e in node.edges]
     ix = argmax(samples)
     # log_action(st, ValuedAction(node.edges[ix]))
+    # if VALIDATE
+    #   validate_action(st, node.edges[ix].action)
+    # end
     next_st = @set apply_action(st, node.edges[ix].action).player = next_player(st.player)
     if is_terminal(next_st)
       backprop!(node, 1, (-1f0,))
@@ -123,7 +126,7 @@ function (nr::NoRollP)(st::State)
   @sync begin
     for task_chan in nr.task_chans
       t = @async for _ in chan
-        explore_next_state!(nr.root, st, gpu_com(nr.req, task_chan))
+        explore_next_state!(nr.root, $st, gpu_com(nr.req, $(task_chan)))
         # println("")
       end
       bind(chan, t)

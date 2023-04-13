@@ -226,7 +226,7 @@ function noroll_train_loop()
         device!(1)
         noroll_trainer(net, ps, st, newparams, buffer_chan, req)
       elseif i == 2
-        device!(3)
+        device!(4)
         evaluator(net, req, newparams[i])
       else
         noroll_player(buffer_chan, req)

@@ -1,9 +1,9 @@
 const discount = 0.99f0
 const inv_discount = 1/discount
 
-const VALIDATE=true;
+const VALIDATE=false;
 
-const limits = @SVector [7, 8]
+const limits = @SVector Int8[7, 8]
 
 const Pos = SVector{2, Int8}
 
@@ -20,10 +20,10 @@ end
 const start_state = State(1, 
   SVector{2}([
     PlayerState(
-      SVector{2}([4,1]),
+      SVector{2}(Int8[4,1]),
       SMatrix{2,5}(Int8[collect(2:6) fill(1, 5)]')),
     PlayerState(
-      SVector{2}([4,8]),
+      SVector{2}(Int8[4,8]),
       SMatrix{2,5}(Int8[collect(2:6) fill(8, 5)]'))
       ]))
 
@@ -117,8 +117,9 @@ function assert_valid_state(st::State)
     @assert length(encoded) == length(unique(encoded))
     ball_pos = encode(st.positions[i].ball[:, na])
     if !(ball_pos[1] in encoded)
-      println("Ball pos ", ball_pos)
-      println("Encoded ", encoded)
+      println("Ball pos ", st.positions[i].ball)
+      println("Me ", st.positions[i].pieces)
+      println("Opponent ", st.positions[next_player(i)].pieces)
       @assert false
     end
     @assert all(st.positions[i].pieces .>= 1)
@@ -201,6 +202,10 @@ end
 
 opponent_moved!(player, action::Action) = nothing
 
+function validate_action(st::State, a::Action)
+  @assert a ∈ actions(st)
+end
+
 function simulate(st::State, players; steps=150, log=false, track=false)
   states = Vector{State}()
   if track
@@ -210,6 +215,9 @@ function simulate(st::State, players; steps=150, log=false, track=false)
       a = players[st.player](st)
       if log
         log_action(st, a)
+      end
+      if VALIDATE
+        validate_action(st, a.action)
       end
       st = apply_action(st, a)
       if is_terminal(st)
