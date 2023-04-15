@@ -4,7 +4,6 @@ using Lux, NNlib, Zygote, Optimisers, CUDA, Distributions
 using StaticArrays, Accessors, Random
 using Functors, StatsBase, DataStructures
 using StatsBase: mean
-using Infiltrator 
 # using ThreadTools
 using Unzip
 

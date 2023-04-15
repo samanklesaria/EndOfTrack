@@ -1,5 +1,14 @@
 # Value functions are from the perspective of the current player
 
+# TODO: better error handling.
+# Opponent-moved expects a correct move.
+
+# Perhaps we should be okay with errors happening.
+# Instead of erring, we should just terminate the current run and start a new one. 
+# Log it to stderr.
+
+
+
 mutable struct EdgeP{N}
   action::Action
   dist::Union{ValPrior, Dirac{Float32}}
@@ -47,7 +56,9 @@ const TestNoRoll = NoRollP{Nothing,Nothing}
 function opponent_moved!(nr::NoRollP, action::Action)
   if !nr.shared
     ix = findfirst(e-> e.action == action, nr.root.edges)
-    @infiltrate isnothing(ix)
+    if isnothing(ix)
+      error("Opponent's moved was impossible")
+    end
     dest = nr.root.edges[ix].dest
     if !isnothing(dest)
       nr.root = dest 

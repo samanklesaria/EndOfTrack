@@ -11,6 +11,10 @@ function posterior(dist::ValPrior, n, q, q2)
   ValPrior(dist.m1 + q, dist.m2 + q2, dist.n+n)
 end
 
+function posterior(dist::Dirac, n, q, q2)
+  error("This should never be called")
+end
+
 function Base.rand(rng::AbstractRNG, d::ValPrior)
   a = 1 + (d.n / 2)
   lam = 1 + d.n

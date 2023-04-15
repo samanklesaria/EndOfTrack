@@ -14,9 +14,9 @@ function winner_test(st, steps, winner)
       println("\n$(typeof(p))")
       init!(p; state=st)
       r1 = simulate(st, (p, p), steps=steps + 1, log=true)
-      @infiltrate r1.winner != winner
+      @assert r1.winner == winner
       if !isnothing(winner)
-        @infiltrate r1.steps != steps
+        @assert r1.steps == steps
       end
     end
   end

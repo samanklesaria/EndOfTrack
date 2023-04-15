@@ -1,7 +1,7 @@
 using TensorBoardLogger, Logging
 
 const TRAIN_BATCH_SIZE = 64
-const EVAL_BATCH_SIZE = 64
+const EVAL_BATCH_SIZE = 128
 
 # TODO: if we encoded the positions, our replay buffer would
 # take half the space.
@@ -49,12 +49,13 @@ function make_net()
     Dense(32, 1, tanh),
     WrappedFunction(x->clamp.(x, -0.95, 0.95))])
   rng = Random.default_rng()
-  ps, st = Lux.setup(rng, net)
-  if isfile("checkpoint.bson")
-    @load "checkpoint.bson" ps
+  cpu_params = Lux.setup(rng, net)
+  if isfile("noroll-checkpoint.bson")
+    @load "noroll-checkpoint.bson" cpu_params
     println("Loaded weights")
   end
-  net, st, ps
+  cpu_ps, cpu_st = cpu_params
+  net, cpu_st, cpu_ps
 end
 
 # Used to indicate that updated NN params are available
@@ -77,12 +78,14 @@ function evaluator(net, req::ReqChan, newparams::NewParams)
   cpu_ps, cpu_st = newparams.n
   @atomic newparams.n = nothing
   ps, st = gpu(cpu_ps), gpu(Lux.testmode(cpu_st))
+  warned = false
   while true
     if !isnothing(newparams.n)
       cpu_ps, cpu_st = newparams.n
       ps, st = gpu(cpu_ps), gpu(Lux.testmode(cpu_st))
     end
     if req.n_avail_items > 0
+      warned = false
       pics, outs = unzip([take!(req) for _ in 1:req.n_avail_items])
       sizes = size.(pics, 4)
       cumsizes = [0; cumsum(sizes)]
@@ -93,8 +96,11 @@ function evaluator(net, req::ReqChan, newparams::NewParams)
         put!(out, vals)
       end
     else
-      println("Empty evaluation queue")
-      sleep(0.1)
+      if !warned
+        println("Empty evaluation queue")
+        warned = true
+      end
+      sleep(0.001)
     end
   end
 end
@@ -111,21 +117,29 @@ function with_values(game::GameResult)
 end
 
 function noroll_player(buffer_chan::Channel{ReplayBuffer}, req::ReqChan)
-  while true
-    noroll = NoRoll(req; shared=true)
-    players = (noroll, noroll)
-    println("Starting game on thread $(Threads.threadid())")
-    result = simulate(start_state, players; track=true)
-    gameres = GameResult(game_q(result), result.states)
-    println("Finished game on $(Threads.threadid())")
-    nsts, values = with_values(gameres)
-    nsts2 = map_state.(Ref(flip_pos_vert), nsts)
-    nsts3 = flip_players.(nsts)
-    buffer = take!(buffer_chan)
-    append!(buffer, collect(zip(nsts, values)))
-    append!(buffer, collect(zip(nsts2, values)))
-    append!(buffer, collect(zip(nsts3, -values)))
-    put!(buffer_chan, buffer)
+  open("errors.log", "w") do io
+    with_logger(SimpleLogger(io)) do
+      while true
+        try
+          noroll = NoRoll(req; shared=true)
+          players = (noroll, noroll)
+          println("Starting game on thread $(Threads.threadid())")
+          result = simulate(start_state, players; track=true)
+          gameres = GameResult(game_q(result), result.states)
+          println("Finished game on $(Threads.threadid())")
+          nsts, values = with_values(gameres)
+          nsts2 = map_state.(Ref(flip_pos_vert), nsts)
+          nsts3 = flip_players.(nsts)
+          buffer = take!(buffer_chan)
+          append!(buffer, collect(zip(nsts, values)))
+          append!(buffer, collect(zip(nsts2, values)))
+          append!(buffer, collect(zip(nsts3, -values)))
+          put!(buffer_chan, buffer)
+        catch exc
+          @error exception=exc
+        end
+      end
+    end
   end
 end
 
@@ -157,15 +171,23 @@ function noroll_trainer(net, cpu_ps, cpu_st, newparams::Vector{NewParams},
           @info "trainer" loss
         end
         if ix % 1000 == 999
-          @save "noroll-checkpoint.bson" ps
           println("Saved")
           cpu_params = (cpu(ps), cpu(st))
+          @save "noroll-checkpoint.bson" cpu_params
           for newparam in newparams
             @atomic newparam.n = cpu_params
           end
-          valq = validate_noroll(req, seed)
-          println("Validating")
-          @info "validate" valq
+          println("Validating")          
+          try
+            valq = validate_noroll(req, seed)
+            @info "validate" valq
+          catch exc
+            open("val_errors.log", "a") do io
+              with_logger(SimpleLogger(io)) do                
+                @error exception=exc
+              end
+            end
+          end
         end
       else
         println("Not enough to train")
@@ -173,29 +195,6 @@ function noroll_trainer(net, cpu_ps, cpu_st, newparams::Vector{NewParams},
         sleep(10)
       end
     end 
-  end
-end
-
-function problem_solver(req)
-  rng = Xoshiro(UInt8(200))
-  while true
-    print(".")
-    players = (NoRoll(req; shared=false), AlphaBeta(4, rng))
-    simulate(start_state, players)
-  end
-end
-
-function problem2()
-  net, st, ps = make_net()
-  req = ReqChan(EVAL_BATCH_SIZE)
-  newparams = NewParams[NewParams((ps, st)) for _ in 1:1]
-  Threads.@threads :static for i in 1:4
-      if i == 1
-        device!(3)
-        evaluator(net, req, newparams[i])
-      else
-        problem_solver(req)
-      end
   end
 end
 
@@ -215,21 +214,28 @@ function validate_noroll(req::ReqChan, seed::UInt8)
 end
 
 function noroll_train_loop()
-  N = Threads.nthreads() - 1
   net, st, ps = make_net()
   buffer_chan = Channel{ReplayBuffer}(1)
   req = ReqChan(EVAL_BATCH_SIZE)
   put!(buffer_chan, ReplayBuffer(1_000_000))
   newparams = NewParams[NewParams((ps, st)) for _ in 1:2]
-  Threads.@threads :static for i in 1:N
-      if i == 1
-        device!(1)
-        noroll_trainer(net, ps, st, newparams, buffer_chan, req)
-      elseif i == 2
-        device!(4)
-        evaluator(net, req, newparams[i])
-      else
-        noroll_player(buffer_chan, req)
+  @sync begin
+    for _ in 1:6
+      Threads.@spawn noroll_player(buffer_chan, req)
+    end
+    Threads.@spawn begin
+      @async begin
+        device!(2)
+        evaluator(net, req, newparams[1])
       end
+      @async begin
+        device!(6)
+        evaluator(net, req, newparams[2])
+      end
+    end
+    Threads.@spawn begin
+      device!(1)
+      noroll_trainer(net, ps, st, newparams, buffer_chan, req)
+    end
   end
 end
