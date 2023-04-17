@@ -4,6 +4,7 @@ using Lux, NNlib, Zygote, Optimisers, CUDA, Distributions
 using StaticArrays, Accessors, Random
 using Functors, StatsBase, DataStructures
 using StatsBase: mean
+using Infiltrator
 # using ThreadTools
 using Unzip
 
@@ -16,6 +17,7 @@ include("noroll.jl")
 include("nn.jl")
 include("tests.jl")
 # include("gui.jl")
+include("val.jl")
 
 # function playoff(players)
 #   N = 20
