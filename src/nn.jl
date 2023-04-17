@@ -146,6 +146,9 @@ function ab_player(buffer_chan::Channel{ReplayVector}, req::ReqChan, seed)
           batch = ([nsts; nsts2; nsts3], [values; values; -values])
           put!(buffer_chan, batch)
         catch exc
+          if isa(exc, InterruptException)
+            return 
+          end
           @error exception=exc
         end
       end
@@ -223,9 +226,8 @@ function validate_noroll(req::ReqChan, seed::UInt8)
     game_q(simulate(start_state, players))
 end
 
-function ab_trainer(buffer_chan, net, newparams, req, seed)
+function ab_trainer(buffer_chan, net, cpu_st, cpu_ps, newparams, req, seed)
   println("Started trainer loop")
-  cpu_ps, cpu_st = newparams[1].n
   st, ps = (gpu(Lux.trainmode(cpu_st)), gpu(cpu_ps))
   opt = OptimiserChain(WeightDecay(1f-4),
     ClipGrad(1.0), Optimisers.AdaBelief(1f-4))
@@ -253,6 +255,9 @@ function ab_trainer(buffer_chan, net, newparams, req, seed)
           valq = validate_noroll(req, seed)
           @info "validate" valq
         catch exc
+          if isa(exc, InterruptException)
+            return 
+          end
           open("val_errors.log", "a") do io
             with_logger(SimpleLogger(io)) do                
               @error exception=exc
@@ -271,23 +276,24 @@ function async_train_loop()
   req = ReqChan(EVAL_BATCH_SIZE)
   newparams = NewParams[NewParams((ps, st)) for _ in 1:2]
   @sync begin
-    for i in 1:2
+    t = @async begin
+      device!(4)
+      ab_trainer(buffer_chan, net, st, ps, newparams, req, seed)
+    end
+    bind(buffer_chan, t)
+    errormonitor(t)
+    for i in 1:1
       t = @async begin
         device!(i)
         evaluator(net, req, newparams[i])
       end
       bind(req, t)
     end
-    for _ in 1:6
+    for _ in 1:1
       t = @async ab_player(buffer_chan, req, seed)
       bind(req, t)
       bind(buffer_chan, t)
     end
-    t = @async begin
-      device!(8)
-      ab_trainer(buffer_chan, net, newparams, req, seed)
-    end
-    bind(buffer_chan, t)
   end
 end
 
