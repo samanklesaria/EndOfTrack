@@ -3,7 +3,7 @@ const inv_discount = 1/discount
 
 const VALIDATE=false;
 
-const limits = @SVector Int8[7, 8]
+const limits = @SVector Int8[7, 5]
 
 const Pos = SVector{2, Int8}
 
@@ -24,7 +24,7 @@ const start_state = State(1,
       SMatrix{2,5}(Int8[collect(2:6) fill(1, 5)]')),
     PlayerState(
       SVector{2}(Int8[4,8]),
-      SMatrix{2,5}(Int8[collect(2:6) fill(8, 5)]'))
+      SMatrix{2,5}(Int8[collect(2:6) fill(limits[2], 5)]'))
       ]))
 
 

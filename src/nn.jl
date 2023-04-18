@@ -10,14 +10,22 @@ const EVAL_BATCH_SIZE = 128
 # and NoRoll get invalid states. Why?
 
 # How is it possible to have the parent node use a Dirac
-# distribution? 
+# distribution? Why do we occasionally get this error? 
 
+# TODO: make smaller model. Then make code to
+# load the smaller weights into the bigger model.
+
+function sorted_gpus()
+  "Gets least busy gpus"
+  usage = parse.(Int, split(readchomp(`./getter.sh`), "\n"))
+  sortperm(usage)
+end
 
 const ReplayBuffer = CircularBuffer{Tuple{State, Float32}}
 const ReplayVector = Tuple{Vector{State}, Vector{Float32}}
 
 function as_pic(st::State)
-  pic = zeros(Float32, 7,8,6,1)
+  pic = zeros(Float32, limits[1], limits[2], 6, 1)
   for i in 1:2
     for j in 1:5
       x, y = st.positions[i].pieces[:, j]
@@ -25,7 +33,7 @@ function as_pic(st::State)
     end
     x, y = st.positions[i].ball
     pic[x, y, 2 + i, 1] = 1
-    boundary = (i==1) ? 1 : 8
+    boundary = (i==1) ? 1 : limits[2]
     pic[:, boundary, 4 + i, 1] .= 1
   end
   pic
@@ -102,7 +110,7 @@ function with_values(game::GameResult)
 end
 
 function noroll_player(buffer_chan::Channel{ReplayBuffer}, req::ReqChan)
-  open("errors2.log", "w") do io
+  open("errors.log", "w") do io
     with_logger(SimpleLogger(io)) do
       while true
         try
@@ -269,6 +277,7 @@ function ab_trainer(buffer_chan, net, cpu_st, cpu_ps, newparams, req, seed)
   end
 end
 
+# Alpha-go vs AlphaBeta on full size with parallelism in all but evaluator
 function async_train_loop()
   seed = UInt8(14)
   net, st, ps = make_net()
@@ -296,6 +305,7 @@ function async_train_loop()
   end
 end
 
+# Alpha-go vs AlphaBeta on full size, without parallelism
 function async_train_loop2()
   seed = UInt8(14)
   net, st, ps = make_net()
@@ -319,28 +329,28 @@ function async_train_loop2()
   end
 end
 
+# Self play between Alpha-Go agents
 function parallel_train_loop()
   net, st, ps = make_net()
   buffer_chan = Channel{ReplayBuffer}(1)
   req = ReqChan(EVAL_BATCH_SIZE)
   put!(buffer_chan, ReplayBuffer(1_000_000))
   newparams = NewParams[NewParams((ps, st)) for _ in 1:2]
+  gpus = Iterators.stateful(sorted_gpus())
   @sync begin
     for _ in 1:6
       Threads.@spawn noroll_player(buffer_chan, req)
     end
     Threads.@spawn begin
-      @async begin
-        device!(2)
-        evaluator(net, req, newparams[1])
-      end
-      @async begin
-        device!(6)
-        evaluator(net, req, newparams[2])
+      for i in 1:2
+        @async begin
+          device!(popfirst!(gpus))
+          evaluator(net, req, newparams[i])
+        end
       end
     end
     Threads.@spawn begin
-      device!(1)
+      device!(popfirst!(gpus))
       noroll_trainer(net, ps, st, newparams, buffer_chan, req)
     end
   end

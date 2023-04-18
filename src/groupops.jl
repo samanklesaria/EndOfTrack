@@ -1,3 +1,4 @@
+# TODO: generalize this to arbitrary limits
 
 abstract type GroupElt end
 
