@@ -17,7 +17,6 @@ include("noroll.jl")
 include("nn.jl")
 include("tests.jl")
 # include("gui.jl")
-include("val.jl")
 
 # function playoff(players)
 #   N = 20

@@ -44,8 +44,8 @@ function make_net()
     WrappedFunction(x->clamp.(x, -0.95, 0.95))])
   rng = Random.default_rng()
   cpu_params = Lux.setup(rng, net)
-  if isfile("checkpoint.bson")
-    @load "checkpoint.bson" cpu_params
+  if isfile("ab-checkpoint.bson")
+    @load "ab-checkpoint.bson" cpu_params
     println("Loaded weights")
   end
   cpu_ps, cpu_st = cpu_params
@@ -102,7 +102,7 @@ function with_values(game::GameResult)
 end
 
 function noroll_player(buffer_chan::Channel{ReplayBuffer}, req::ReqChan)
-  open("errors.log", "w") do io
+  open("errors2.log", "w") do io
     with_logger(SimpleLogger(io)) do
       while true
         try
@@ -129,12 +129,12 @@ function noroll_player(buffer_chan::Channel{ReplayBuffer}, req::ReqChan)
 end
 
 
-function ab_player(buffer_chan::Channel{ReplayVector}, req::ReqChan, seed)
-  open("errors.log", "w") do io
+function ab_player(buffer_chan::Channel{ReplayVector}, req::ReqChan, seed; tasks=16)
+  open("errors2.log", "w") do io
     with_logger(SimpleLogger(io)) do
       while true
         try
-          noroll = NoRoll(req; shared=false)
+          noroll = NoRoll(req; shared=false, tasks=tasks)
           players = (noroll,  AlphaBeta(5, Xoshiro(seed)))
           println("Starting game on thread $(Threads.threadid())")
           result = simulate(start_state, players; track=true)
@@ -146,7 +146,7 @@ function ab_player(buffer_chan::Channel{ReplayVector}, req::ReqChan, seed)
           batch = ([nsts; nsts2; nsts3], [values; values; -values])
           put!(buffer_chan, batch)
         catch exc
-          if isa(exc, InterruptException)
+          if isa(exc, InterruptException) || isa(exc, InvalidStateException)
             return 
           end
           @error exception=exc
@@ -249,16 +249,16 @@ function ab_trainer(buffer_chan, net, cpu_st, cpu_ps, newparams, req, seed)
       @info "trainer" loss
       if ix % 5 == 4
         println("Saved")
-        @save "ab-checkpoint.bson" cpu_params
+        @save "another-checkpoint.bson" cpu_params
         println("Validating")          
         try
           valq = validate_noroll(req, seed)
           @info "validate" valq
         catch exc
-          if isa(exc, InterruptException)
+          if isa(exc, InterruptException) || isa(exc, InvalidStateException)
             return 
           end
-          open("val_errors.log", "a") do io
+          open("val_errors2.log", "a") do io
             with_logger(SimpleLogger(io)) do                
               @error exception=exc
             end
@@ -270,30 +270,52 @@ function ab_trainer(buffer_chan, net, cpu_st, cpu_ps, newparams, req, seed)
 end
 
 function async_train_loop()
-  seed = rand(UInt8)
+  seed = UInt8(14)
   net, st, ps = make_net()
   buffer_chan = Channel{ReplayVector}()
   req = ReqChan(EVAL_BATCH_SIZE)
   newparams = NewParams[NewParams((ps, st)) for _ in 1:2]
   @sync begin
-    t = @async begin
-      device!(4)
+    t = Threads.@spawn begin
+      device!(8)
       ab_trainer(buffer_chan, net, st, ps, newparams, req, seed)
     end
     bind(buffer_chan, t)
-    errormonitor(t)
-    for i in 1:1
+    for i in 1:2
       t = @async begin
-        device!(i)
+        device!(2 + i)
         evaluator(net, req, newparams[i])
       end
       bind(req, t)
     end
-    for _ in 1:1
-      t = @async ab_player(buffer_chan, req, seed)
+    for _ in 1:5
+      t = Threads.@spawn ab_player(buffer_chan, req, seed)
       bind(req, t)
       bind(buffer_chan, t)
     end
+  end
+end
+
+function async_train_loop2()
+  seed = UInt8(14)
+  net, st, ps = make_net()
+  buffer_chan = Channel{ReplayVector}()
+  req = ReqChan(EVAL_BATCH_SIZE)
+  newparams = NewParams[NewParams((ps, st)) for _ in 1:1]
+  @sync begin
+    t = @async begin
+      device!(8)
+      ab_trainer(buffer_chan, net, st, ps, newparams, req, seed)
+    end
+    bind(buffer_chan, t)
+    t = @async begin
+      device!(2)
+      evaluator(net, req, newparams[1])
+    end
+    bind(req, t)
+    t = @async ab_player(buffer_chan, req, seed; tasks=128)
+    bind(req, t)
+    bind(buffer_chan, t)
   end
 end
 
