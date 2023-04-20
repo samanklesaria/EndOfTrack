@@ -5,6 +5,7 @@ using StaticArrays, Accessors, Random
 using Functors, StatsBase, DataStructures
 using StatsBase: mean
 using Infiltrator
+using HDF5
 # using ThreadTools
 using Unzip
 
@@ -15,7 +16,8 @@ include("groupops.jl")
 include("dists.jl")
 include("noroll.jl")
 include("nn.jl")
-include("tests.jl")
+# include("tests.jl")
+include("static.jl")
 # include("gui.jl")
 
 # function playoff(players)

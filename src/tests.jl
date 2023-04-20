@@ -5,7 +5,9 @@
 next_player(::Nothing) = nothing
 
 function winner_test(st, steps, winner)
-  for (st, winner) in [(st, winner), (flip_players(st), next_player(winner))]
+  for (st, winner) in [
+    (st, winner), (flip_players(st), next_player(winner)),
+    (flip_board(st), winner)]
     test_players = [
       AlphaBeta(4), 
       TestNoRoll(nothing; st=st, shared=true)
