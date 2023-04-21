@@ -12,6 +12,11 @@ const EVAL_BATCH_SIZE = 128
 # How is it possible to have the parent node use a Dirac
 # distribution? Why do we occasionally get this error? 
 
+# 1. Don't look at all the data. Try to overfit. Maybe make it bigger?
+# 2. Don't look at any state that is equal to the start state.
+# 3. Don't augment. 
+# 
+
 function sorted_gpus()
   "Gets least busy gpus"
   usage = parse.(Int, split(readchomp(`./getter.sh`), "\n"))
@@ -27,9 +32,13 @@ function get_batch(h5::HDF5.File, ix)
   balls2 = h5["balls2"][ix,:]
   states = [State(players[i], [PlayerState(balls1[i,:], pieces1[i,:,:]),
     PlayerState(balls2[i,:], pieces2[i,:,:])]) for i in 1:length(ix)] 
-  states2 = map_state.(Ref(flip_pos_vert), states)
-  states3 = flip_players.(states)
-  ([states; states2; states3], [values; values; -values])
+  mask = states .!= Ref(start_state)
+  (states[mask], values[mask])
+  # mstates = states[mask]
+  # mvals = values[mask]
+  # states2 = map_state.(Ref(flip_pos_vert), mstates)
+  # states3 = flip_players.(mstates)
+  # ([mstates; states2; states3], [mvals; mvals; -mvals])
 end
 
 function as_pic(st::State)
@@ -58,7 +67,7 @@ function static_train()
   lg=TBLogger("srun", min_level=Logging.Info)
   counter = 0
   with_logger(lg) do
-    for epoch in 1:3000
+    for epoch in 1:1000
       for ix in 1:64:(N-63)
         counter += 1
         (games, values) = get_batch(h5, ix:ix+63)
@@ -68,7 +77,7 @@ function static_train()
           mean(abs2.(q_pred .- gpu(values)))
         end
         st_opt, ps = Optimisers.update!(st_opt, ps, grad[1])
-        if counter % 50 == 49
+        if counter % 50 == 1
           @info "trainer" loss
         end
         if counter % 200 == 199
@@ -82,14 +91,17 @@ function static_train()
   @save "static-checkpoint.bson" cpu_params
 end
 
+cat3(x,y) = cat(x,y; dims=3)
+
+Unpad() = WrappedFunction(x-> pad_zeros(x, 1; dims=(1,2)))
+
 function make_net()
   net = Chain([
-    Conv((3,3), 6=>16, swish),
-    SkipConnection(Conv((3,3), 16=>16, swish, pad=SamePad()), +),
-    Conv((3,3), 16=>32, swish),
-    SkipConnection(Conv((3,3), 32=>32, swish, pad=SamePad()), +),
+    SkipConnection(Chain([Conv((3,3), 6=>8, swish), Unpad()]), cat3),
+    SkipConnection(Chain([Conv((3,3), 6+8=>8, swish), Unpad()]), cat3),
+    Conv((3,3), 6+2*8=>32, swish),
     FlattenLayer(),
-    Dense(96, 1, tanh),
+    Dense(32*15, 1, tanh),
     WrappedFunction(x->clamp.(x, -0.95, 0.95))])
   rng = Random.default_rng()
   cpu_params = Lux.setup(rng, net)
