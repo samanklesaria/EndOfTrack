@@ -1,6 +1,6 @@
 module EndOfTrack
 using BSON: @save, @load
-using Lux, NNlib, Zygote, Optimisers, CUDA, Distributions
+using Flux, NNlib, CUDA, Distributions
 using StaticArrays, Accessors, Random
 using Functors, StatsBase, DataStructures
 using StatsBase: mean

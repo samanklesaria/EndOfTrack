@@ -32,13 +32,13 @@ function get_batch(seen, h5::HDF5.File, ix)
   states = [State(players[i], [PlayerState(balls1[i,:], pieces1[i,:,:]),
     PlayerState(balls2[i,:], pieces2[i,:,:])]) for i in 1:length(ix)] 
   mask = states .!= Ref(start_state)
-  for (s,v) in zip(states[mask], values[mask])
-    if haskey(seen, s)
-      @assert seen[s] == v
-    else
-      seen[s] = v
-    end
-  end
+  # for (s,v) in zip(states[mask], values[mask])
+  #   if haskey(seen, s)
+  #     @assert seen[s] == v
+  #   else
+  #     seen[s] = v
+  #   end
+  # end
   (states[mask], (values[mask] .+ 1) ./ 2)
 end
 
@@ -62,95 +62,58 @@ end
 function static_train()
   seen = Dict{State, Float32}()
   device!(sorted_gpus()[1])
-  net, cpu_st, cpu_ps = make_stacknet()
-  st, ps = (gpu(Lux.trainmode(cpu_st)), gpu(cpu_ps))
-  opt = OptimiserChain(Optimisers.Adam(1f-3))
-  st_opt = Optimisers.setup(opt, ps)
+  net = make_net()
+  Flux.trainmode!(net)
   h5 = h5open("smalls.h5", "r")
+  opt = Flux.setup(Flux.Adam(1f-3), net)
   N = Int(length(h5["values"]))
   lg=TBLogger("srun", min_level=Logging.Info)
   counter = 0
   with_logger(lg) do
     for epoch in 1:100_000
-      for ix in [1] # :64:640 # :64:(N-63)
+      for ix in 1:64:(N-63)
         counter += 1
         (games, values) = get_batch(seen, h5, ix:ix+63)
         pics = gpu(cat4(as_pic.(games)))
         predictions = Float32[]
-        loss, grad = withgradient(ps) do ps 
-          q_pred, st = net(pics, ps, st)
+        loss, grads = Flux.withgradient(net) do m
+          q_pred = m(pics)
           predictions = vec(cpu(q_pred))
-          mean((q_pred .- gpu(values)).^2)
+          Flux.logitbinarycrossentropy(q_pred, gpu(values[na, :]))
         end
-        st_opt, ps = Optimisers.update!(st_opt, ps, grad[1])
+        Flux.update!(opt, net, grads[1])
         if counter % 50 == 1
           @info "trainer" loss
           log_histogram(lg, "predictions", predictions)
           log_histogram(lg, "values", vec(values))
         end
-        # if counter % 200 == 199
-        #   cpu_params = (cpu(ps), cpu(st))
-        #   @save "static-checkpoint.bson" cpu_params
-        # end
       end
     end
   end
-  cpu_params = (cpu(ps), cpu(st))
-  @save "static-checkpoint.bson" cpu_params
 end
 
 cat3(x,y) = cat(x,y; dims=3)
+pad(x) = pad_zeros(x, 1; dims=(1,2))
 
-Unpad() = WrappedFunction(x-> pad_zeros(x, 1; dims=(1,2)))
 
-struct ResNet{C,A} <: Lux.AbstractExplicitContainerLayer{(:c1, :c2, :c3)}
-  c1::C
-  c2::C
-  c3::A
+function make_net()
+  Chain([
+    Conv((3,3), 6=>16, swish),
+    BatchNorm(16),
+    Conv((3,3), 16=>32, swish), 
+    Flux.flatten,
+    BatchNorm(32*3),
+    Dense(32*3, 1)
+  ]) |> gpu
 end
-
-function (r::ResNet)(x, ps, st)
-  y, st1 = r.c1(x, ps.c1, st.c1)
-  z, st2 = r.c2(cat3(y, x), ps.c2, st.c2)
-  w, st3 = r.c3(cat3(y + z, x), ps.c3, st.c3)
-  w, (c1=st1, c2=st2, c3=st3)
-end
-
-function make_resnet()
-  net = Chain([
-    ResNet(
-      Chain([Conv((3,3), 6=>8, swish), Unpad()]),
-      Chain([Conv((3,3), 6+8=>8, swish), Unpad()]),
-      Conv((3,3), 6+8=>8, swish)),
-    FlattenLayer(),
-    Dense(8*15, 1, tanh),
-    WrappedFunction(x->clamp.(x, -0.95, 0.95))])
-  rng = Random.default_rng()
-  cpu_params = Lux.setup(rng, net)
-  if isfile("ab-checkpoint.bson")
-    @load "ab-checkpoint.bson" cpu_params
-    println("Loaded weights")
-  end
-  cpu_ps, cpu_st = cpu_params
-  net, cpu_st, cpu_ps
-end
-
-function make_stacknet()
-  net = Chain([
-    SkipConnection(Chain([Conv((3,3), 6=>32, swish), Unpad()]), cat3),
-    SkipConnection(Chain([Conv((3,3), 6+32=>32, swish), Unpad()]), cat3),
-    Conv((3,3), 6+32+32=>128, swish),
-    FlattenLayer(),
-    Dense(1920, 1)])
-  rng = Random.default_rng()
-  cpu_params = Lux.setup(rng, net)
-  if isfile("ab-checkpoint.bson")
-    @load "ab-checkpoint.bson" cpu_params
-    println("Loaded weights")
-  end
-  cpu_ps, cpu_st = cpu_params
-  net, cpu_st, cpu_ps
-end
+# function make_stacknet()
+#   Chain([
+#     SkipConnection(Chain([Conv((3,3), 6=>32, swish), pad]), cat3),
+#     SkipConnection(Chain([Conv((3,3), 6+32=>32, swish), pad]), cat3),
+#     Conv((3,3), 6+32+32=>128, swish),
+#     Flux.flatten,
+#     Dense(1920, 1)]) |> gpu
+# end
 
 function approx_vals(st::Vector{State}, gpucom::GPUCom)
   trans, nst = unzip(normalize_player.(st))
