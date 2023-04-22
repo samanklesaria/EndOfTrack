@@ -1,4 +1,4 @@
-const mean_vert = SVector{2, Int8}([0, (limits[2] + 1)/2])
+const mean_vert = SVector{2, Float32}([0, (limits[2] + 1)/2])
 const flip_vert = SVector{2, Int8}([1, -1])
 
 const mean_hor = SVector{2}([(limits[1] + 1)/2, 0])

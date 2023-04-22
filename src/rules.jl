@@ -3,7 +3,7 @@ const inv_discount = 1/discount
 
 const VALIDATE=false;
 
-const limits = @SVector Int8[7, 5]
+const limits = @SVector Int8[7, 8]
 const center = (limits[1] + 1)/2
 
 const Pos = SVector{2, Int8}

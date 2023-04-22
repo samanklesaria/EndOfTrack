@@ -22,7 +22,7 @@ function sorted_gpus()
   sortperm(usage)
 end
 
-function get_batch(seen, h5::HDF5.File, ix)
+function get_batch(h5::HDF5.File, ix)
   values = h5["values"][ix]
   players = h5["players"][ix]
   pieces1 = h5["pieces1"][ix,:,:]
@@ -32,13 +32,9 @@ function get_batch(seen, h5::HDF5.File, ix)
   states = [State(players[i], [PlayerState(balls1[i,:], pieces1[i,:,:]),
     PlayerState(balls2[i,:], pieces2[i,:,:])]) for i in 1:length(ix)] 
   mask = states .!= Ref(start_state)
-  # for (s,v) in zip(states[mask], values[mask])
-  #   if haskey(seen, s)
-  #     @assert seen[s] == v
-  #   else
-  #     seen[s] = v
-  #   end
-  # end
+  for s in states
+    @assert s.player == 1
+  end
   (states[mask], (values[mask] .+ 1) ./ 2)
 end
 
@@ -60,12 +56,11 @@ end
 
 
 function static_train()
-  seen = Dict{State, Float32}()
   device!(sorted_gpus()[1])
   net = make_net()
   Flux.trainmode!(net)
-  h5 = h5open("smalls.h5", "r")
-  opt = Flux.setup(Flux.Adam(1f-3), net)
+  h5 = h5open("gamedb.h5", "r")
+  opt = Flux.setup(Flux.Adam(5f-4), net)
   N = Int(length(h5["values"]))
   lg=TBLogger("srun", min_level=Logging.Info)
   counter = 0
@@ -73,7 +68,7 @@ function static_train()
     for epoch in 1:100_000
       for ix in 1:64:(N-63)
         counter += 1
-        (games, values) = get_batch(seen, h5, ix:ix+63)
+        (games, values) = get_batch(h5, ix:ix+63)
         pics = gpu(cat4(as_pic.(games)))
         predictions = Float32[]
         loss, grads = Flux.withgradient(net) do m
@@ -101,9 +96,11 @@ function make_net()
     Conv((3,3), 6=>16, swish),
     BatchNorm(16),
     Conv((3,3), 16=>32, swish), 
+    BatchNorm(32),
+    Conv((3,3), 32=>64, swish), 
     Flux.flatten,
-    BatchNorm(32*3),
-    Dense(32*3, 1)
+    BatchNorm(128),
+    Dense(128, 1)
   ]) |> gpu
 end
 # function make_stacknet()
