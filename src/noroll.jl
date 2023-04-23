@@ -29,7 +29,8 @@ const Edge = EdgeP{Node}
 
 const BackEdge = BackEdgeP{Node}
 
-const ReqChan = Channel{Tuple{Array{Float32, 4}, Channel{Vector{Float32}}}}
+const ReqData = Tuple{Array{Float32, 4}, Channel{Vector{Float32}}}
+const ReqChan = Channel{ReqData}
 
 ValuedAction(e::Edge) = ValuedAction(e.action, mean(e.dist))
 
@@ -42,7 +43,7 @@ mutable struct NoRollP{R,T}
 end
 
 function NoRollP{R, T}(req::R; steps=1_600, shared=false,
-    tasks=16, st=start_state) where {R,T}
+    tasks=20, st=start_state) where {R,T}
   val_chans = [T() for _ in 1:tasks]
   gpucom = gpu_com(req, val_chans[1])
   root = init_state!(nothing, st, gpucom)

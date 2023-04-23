@@ -1,41 +1,16 @@
 using TensorBoardLogger, Logging
 
-const TRAIN_BATCH_SIZE = 64
+const TRAIN_BATCH_SIZE = 4 # 64
+const MIN_TRAIN_SIZE = 4 # 128
 const EVAL_BATCH_SIZE = 128
+const REPLAY_SIZE = 700_000
 
-# TODO: if we encoded the positions, our replay buffer would
-# take half the space.
-
-# With validation turned on, playoffs between AlphaBeta
-# and NoRoll get invalid states. Why?
-
-# How is it possible to have the parent node use a Dirac
-# distribution? Why do we occasionally get this error? 
-
-# Maybe look at gradients?
-# Maybe look at outputs? Also variance of outputs?
-# Maybe look at weights?
+const ReplayBuffer = CircularBuffer{Tuple{State, Float32}}
 
 function sorted_gpus()
   "Gets least busy gpus"
   usage = parse.(Int, split(readchomp(`./getter.sh`), "\n"))
   sortperm(usage)
-end
-
-function get_batch(h5::HDF5.File, ix)
-  values = h5["values"][ix]
-  players = h5["players"][ix]
-  pieces1 = h5["pieces1"][ix,:,:]
-  pieces2 = h5["pieces2"][ix,:,:]
-  balls1 = h5["balls1"][ix,:]
-  balls2 = h5["balls2"][ix,:]
-  states = [State(players[i], [PlayerState(balls1[i,:], pieces1[i,:,:]),
-    PlayerState(balls2[i,:], pieces2[i,:,:])]) for i in 1:length(ix)] 
-  mask = states .!= Ref(start_state)
-  for s in states
-    @assert s.player == 1
-  end
-  (states[mask], (values[mask] .+ 1) ./ 2)
 end
 
 function as_pic(st::State)
@@ -54,45 +29,83 @@ function as_pic(st::State)
   pic
 end
 
+# Used to indicate that updated NN params are available
+mutable struct NewParams{P}
+  @atomic n::Union{Nothing, P}
+end
 
-function static_train()
-  device!(sorted_gpus()[1])
-  net = make_net()
+val_to_prob(a::Float32) = (a + 1) / 2
+
+logit_to_val(a::Float32) = clamp((sigmoid_fast(a) * 2) - 1, -0.96, 0.96)
+
+function trainer(net, req, buffer_chan::Channel{ReplayBuffer}, np::Vector{NewParams})
+  seed = rand(TaskLocalRNG(), UInt8)
   Flux.trainmode!(net)
-  h5 = h5open("gamedb.h5", "r")
-  opt = Flux.setup(Flux.Adam(5f-4), net)
-  N = Int(length(h5["values"]))
+  opt = Flux.setup(Flux.Adam(1f-4), net)
   lg=TBLogger("srun", min_level=Logging.Info)
-  counter = 0
+  predictions = Float32[]
+  println("Started training loop")
   with_logger(lg) do
-    for epoch in 1:100_000
-      for ix in 1:64:(N-63)
-        counter += 1
-        (games, values) = get_batch(h5, ix:ix+63)
-        pics = gpu(cat4(as_pic.(games)))
-        predictions = Float32[]
+    for ix in Iterators.countfrom()
+      buffer = take!(buffer_chan)
+      l = length(buffer)
+      if l >= MIN_TRAIN_SIZE
+        ixs = sample(1:l, TRAIN_BATCH_SIZE)
+        batch = buffer[ixs]
+        put!(buffer_chan, buffer)
+        nsts, values = unzip(batch)
+        prob_values = val_to_prob.(values)
+        pic_batch = gpu(cat4(as_pic.(nsts)))  
+        net(pic_batch)
         loss, grads = Flux.withgradient(net) do m
-          q_pred = m(pics)
+          q_pred = m(pic_batch)
           predictions = vec(cpu(q_pred))
-          Flux.logitbinarycrossentropy(q_pred, gpu(values[na, :]))
+          Flux.logitbinarycrossentropy(q_pred, gpu(prob_values[na, :]))
         end
         Flux.update!(opt, net, grads[1])
-        if counter % 50 == 1
+        if ix % 50 == 1
           @info "trainer" loss
           log_histogram(lg, "predictions", predictions)
-          log_histogram(lg, "values", vec(values))
+          log_histogram(lg, "values", prob_values)
         end
+        if ix % 1000 == 1
+          # cpu_net = cpu(net)
+          # @save "checkpoint.bson" cpu_net
+          # println("Saved")
+          try
+            valq = validate_noroll(req, seed)
+            @info "validate" valq
+          catch exc
+            open("val_errors.log", "a") do io
+              with_logger(SimpleLogger(io)) do                
+                @error exception=exc
+              end
+            end
+          end
+        end
+        if ix % 2000 == 1999
+          take!(buffer_chan)
+          cpu_net = cpu(net)
+          for n in np
+            n.n = cpu_net
+          end
+          put!(buffer_chan, ReplayBuffer(REPLAY_SIZE))
+        end
+      else
+        put!(buffer_chan, buffer)
+        println("Not enough to train")
+        sleep(30)
       end
     end
   end
 end
 
+cat4(stack) = reduce((x,y)->cat(x,y; dims=4), stack)     
 cat3(x,y) = cat(x,y; dims=3)
 pad(x) = pad_zeros(x, 1; dims=(1,2))
 
-
 function make_net()
-  Chain([
+  cpu_net = Chain([
     Conv((3,3), 6=>16, swish),
     BatchNorm(16),
     Conv((3,3), 16=>32, swish), 
@@ -101,16 +114,13 @@ function make_net()
     Flux.flatten,
     BatchNorm(128),
     Dense(128, 1)
-  ]) |> gpu
+  ])
+  if isfile("checkpoint.bson")
+    @load "checkpoint.bson" cpu_net
+    println("Loaded weights")
+  end
+  cpu_net
 end
-# function make_stacknet()
-#   Chain([
-#     SkipConnection(Chain([Conv((3,3), 6=>32, swish), pad]), cat3),
-#     SkipConnection(Chain([Conv((3,3), 6+32=>32, swish), pad]), cat3),
-#     Conv((3,3), 6+32+32=>128, swish),
-#     Flux.flatten,
-#     Dense(1920, 1)]) |> gpu
-# end
 
 function approx_vals(st::Vector{State}, gpucom::GPUCom)
   trans, nst = unzip(normalize_player.(st))
@@ -121,7 +131,30 @@ end
 
 approx_vals(st::Vector{State}, ::Nothing) = zeros(Float32, length(st))
 
-cat4(stack) = reduce((x,y)->cat(x,y; dims=4), stack)
+function evaluator(req::ReqChan, newparams::NewParams)
+  net = gpu(newparams.n)
+  @atomic newparams.n = nothing
+  Flux.testmode!(net)
+  while true
+    if !isnothing(newparams.n)
+      net = gpu(newparams.n)
+      Flux.testmode!(net)
+    end
+    fetch(req)
+    pics, outs = unzip([take!(req) for _ in 1:req.n_avail_items if isready(req)])
+    if length(pics) == 0
+      continue
+    end
+    sizes = size.(pics, 4)
+    cumsizes = [0; cumsum(sizes)]
+    batch = gpu(cat4(pics))
+    values = logit_to_val.(net(batch))
+    for (i, out) in enumerate(outs)
+      vals = cpu(values[(cumsizes[i] + 1):cumsizes[i+1]])
+      put!(out, vals)
+    end
+  end
+end
 
 struct GameResult
   value::Float32
@@ -143,3 +176,65 @@ function game_q(result)
     q = -1f0
   end
 end
+
+function validate_noroll(req::ReqChan, seed::UInt8)
+    players = (NoRoll(req; shared=false), AlphaBeta(5, Xoshiro(seed)))
+    game_q(simulate(start_state, players))
+end
+
+
+function player(buffer_chan::Channel{ReplayBuffer}, req::ReqChan)
+  open("errors.log", "w") do io
+    with_logger(SimpleLogger(io)) do
+      while true
+        try
+          noroll = NoRoll(req; shared=true)
+          players = (noroll, noroll)
+          println("Starting game on thread $(Threads.threadid())")
+          result = simulate(start_state, players; track=true, steps=2)
+          gameres = GameResult(game_q(result), result.states)
+          println("Finished game on $(Threads.threadid())")
+          nsts, values = with_values(gameres)
+          buffer = take!(buffer_chan)
+          append!(buffer, collect(zip(nsts, values)))
+          put!(buffer_chan, buffer)
+        catch exc
+          @error exception=exc
+        end
+      end
+    end
+  end
+end
+
+function train_loop()
+  net = make_net()
+  buffer_chan = Channel{ReplayBuffer}(1)
+  req = ReqChan(EVAL_BATCH_SIZE)
+  put!(buffer_chan, ReplayBuffer(REPLAY_SIZE))
+  N_WORK=1 # 10
+  N_EVAL=1 # 3
+  newparams = NewParams[NewParams(net) for _ in 1:N_EVAL]
+  gpus = Iterators.Stateful(sorted_gpus())
+  for i in 2:(N_WORK+1)
+    t1 = @tspawnat i player(buffer_chan, req)
+    bind(req, t1)
+    errormonitor(t1)
+  end
+  for i in 1:N_EVAL
+    t = @tspawnat (N_WORK + 1 + i) begin
+      device!($(popfirst!(gpus)))
+      evaluator(req, newparams[$i])
+    end
+    bind(req, t)
+    errormonitor(t)
+  end
+  tt = @tspawnat (N_WORK + N_EVAL + 2) begin
+    device!($(popfirst!(gpus)))
+    trainer(net, req, buffer_chan, newparams)
+  end
+  errormonitor(tt)
+  bind(req, tt)
+end
+
+# TODO: indicate to workers somehow that a new thing is available.
+# Or maybe not?
