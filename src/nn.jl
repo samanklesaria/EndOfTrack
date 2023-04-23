@@ -68,9 +68,9 @@ function trainer(net, req, buffer_chan::Channel{ReplayBuffer}, np::Vector{NewPar
           log_histogram(lg, "values", prob_values)
         end
         if ix % 1000 == 1
-          # cpu_net = cpu(net)
-          # @save "checkpoint.bson" cpu_net
-          # println("Saved")
+          cpu_net = cpu(net)
+          @save "checkpoint.bson" cpu_net
+          println("Saved")
           try
             valq = validate_noroll(req, seed)
             @info "validate" valq
@@ -86,7 +86,7 @@ function trainer(net, req, buffer_chan::Channel{ReplayBuffer}, np::Vector{NewPar
           take!(buffer_chan)
           cpu_net = cpu(net)
           for n in np
-            n.n = cpu_net
+            @atomic n.n = cpu_net
           end
           put!(buffer_chan, ReplayBuffer(REPLAY_SIZE))
         end
@@ -210,8 +210,8 @@ function train_loop()
   buffer_chan = Channel{ReplayBuffer}(1)
   req = ReqChan(EVAL_BATCH_SIZE)
   put!(buffer_chan, ReplayBuffer(REPLAY_SIZE))
-  N_WORK=15
-  N_EVAL=3
+  N_WORK=20
+  N_EVAL=4
   newparams = NewParams[NewParams(net) for _ in 1:N_EVAL]
   gpus = Iterators.Stateful(sorted_gpus())
   for i in 2:(N_WORK+1)
