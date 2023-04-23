@@ -1,7 +1,7 @@
 using TensorBoardLogger, Logging
 
-const TRAIN_BATCH_SIZE = 4 # 64
-const MIN_TRAIN_SIZE = 4 # 128
+const TRAIN_BATCH_SIZE = 64
+const MIN_TRAIN_SIZE = 128
 const EVAL_BATCH_SIZE = 128
 const REPLAY_SIZE = 700_000
 
@@ -56,7 +56,6 @@ function trainer(net, req, buffer_chan::Channel{ReplayBuffer}, np::Vector{NewPar
         nsts, values = unzip(batch)
         prob_values = val_to_prob.(values)
         pic_batch = gpu(cat4(as_pic.(nsts)))  
-        net(pic_batch)
         loss, grads = Flux.withgradient(net) do m
           q_pred = m(pic_batch)
           predictions = vec(cpu(q_pred))
@@ -191,7 +190,7 @@ function player(buffer_chan::Channel{ReplayBuffer}, req::ReqChan)
           noroll = NoRoll(req; shared=true)
           players = (noroll, noroll)
           println("Starting game on thread $(Threads.threadid())")
-          result = simulate(start_state, players; track=true, steps=2)
+          result = simulate(start_state, players; track=true)
           gameres = GameResult(game_q(result), result.states)
           println("Finished game on $(Threads.threadid())")
           nsts, values = with_values(gameres)
@@ -211,8 +210,8 @@ function train_loop()
   buffer_chan = Channel{ReplayBuffer}(1)
   req = ReqChan(EVAL_BATCH_SIZE)
   put!(buffer_chan, ReplayBuffer(REPLAY_SIZE))
-  N_WORK=1 # 10
-  N_EVAL=1 # 3
+  N_WORK=15
+  N_EVAL=3
   newparams = NewParams[NewParams(net) for _ in 1:N_EVAL]
   gpus = Iterators.Stateful(sorted_gpus())
   for i in 2:(N_WORK+1)
@@ -230,7 +229,7 @@ function train_loop()
   end
   tt = @tspawnat (N_WORK + N_EVAL + 2) begin
     device!($(popfirst!(gpus)))
-    trainer(net, req, buffer_chan, newparams)
+    trainer(gpu(net), req, buffer_chan, newparams)
   end
   errormonitor(tt)
   bind(req, tt)
