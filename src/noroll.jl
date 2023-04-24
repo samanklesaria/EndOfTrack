@@ -43,7 +43,7 @@ mutable struct NoRollP{R,T}
 end
 
 function NoRollP{R, T}(req::R; steps=1_600, shared=false,
-    tasks=20, st=start_state) where {R,T}
+    tasks=16, st=start_state) where {R,T}
   val_chans = [T() for _ in 1:tasks]
   gpucom = gpu_com(req, val_chans[1])
   root = init_state!(nothing, st, gpucom)
@@ -67,7 +67,7 @@ function opponent_moved!(nr::NoRollP, action::Action)
   end
 end
 
-
+# THERE's some kind of concurrency bug here!
 function backprop!(node::Node, n::Int, q)
   q1 = sum(q)
   q2 = sum(qi^2 for qi in q)

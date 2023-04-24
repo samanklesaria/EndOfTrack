@@ -10,7 +10,7 @@ const ReplayBuffer = CircularBuffer{Tuple{State, Float32}}
 function sorted_gpus()
   "Gets least busy gpus"
   usage = parse.(Int, split(readchomp(`./getter.sh`), "\n"))
-  sortperm(usage)
+  sortperm(usage) .- 1
 end
 
 function as_pic(st::State)

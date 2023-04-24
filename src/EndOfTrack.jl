@@ -68,6 +68,14 @@ function bench_AB()
   times, win_avgs 
 end
 
+function do_validate(req, seed)
+  try
+    return validate_noroll(req, seed)
+  catch exc
+    return missing
+  end
+end
+
 function bench_noroll()
   N = 20
   N_EVAL = 4
@@ -82,8 +90,20 @@ function bench_noroll()
     bind(req, t)
     errormonitor(t)
   end
-  results = tmap(seed->validate_noroll(req, UInt8(seed)), 1:N)
+  results = skipmissing(tmap(seed->do_validate(req, UInt8(seed)), 1:N))
   mean(results)
 end
+
+function test_validate(seed)
+  players = (TestNoRoll(nothing; shared=false), AlphaBeta(5, Xoshiro(seed)))
+  game_q(simulate(start_state, players))
+end
+
+function bench_testnoroll()
+  N = 20
+  results = mean(skipmissing(tmap(seed->test_validate(UInt8(seed)), 1:N)))
+end
+
+
 
 end # module
