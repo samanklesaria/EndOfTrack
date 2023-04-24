@@ -51,9 +51,13 @@ function printindent(a)
   print(a)
 end
 
-function log_action(st, action_val::ValuedAction)
+function log_action(st, action_val::ValuedAction; bound=nothing)
   action = action_val.action 
-  val = action_val.value
+  if isnothing(bound)
+    val = "$(action_val.value)"
+  else
+    val = "$(action_val.value), $(bound)"
+  end
   if action[1] == 0
     println("[$val] (fake action)")
   elseif action[1] < 6

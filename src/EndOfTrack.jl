@@ -101,7 +101,7 @@ end
 
 function bench_testnoroll()
   N = 20
-  results = mean(skipmissing(tmap(seed->test_validate(UInt8(seed)), 1:N)))
+  mean(skipmissing(tmap(seed->test_validate(UInt8(seed)), 1:N)))
 end
 
 

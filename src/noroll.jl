@@ -8,7 +8,6 @@
 # Log it to stderr.
 
 
-
 mutable struct EdgeP{N}
   action::Action
   dist::Union{ValPrior, Dirac{Float32}}
@@ -33,6 +32,7 @@ const ReqData = Tuple{Array{Float32, 4}, Channel{Vector{Float32}}}
 const ReqChan = Channel{ReqData}
 
 ValuedAction(e::Edge) = ValuedAction(e.action, mean(e.dist))
+upper(e::Edge) = upperbound(e.dist)
 
 mutable struct NoRollP{R,T}
   root::Node
@@ -67,15 +67,13 @@ function opponent_moved!(nr::NoRollP, action::Action)
   end
 end
 
-# THERE's some kind of concurrency bug here!
-function backprop!(node::Node, n::Int, q)
-  q1 = sum(q)
-  q2 = sum(qi^2 for qi in q)
+function backprop!(node::Node, q1)
+  q2 = q1^2
   back = node.parent
   while !isnothing(back)
     parent_node = back.node
     edge = parent_node.edges[back.ix]
-    edge.dist = posterior(edge.dist, n, q1, q2)
+    edge.dist = posterior(edge.dist, 1, q1, q2)
     node = parent_node
     back = node.parent
     q1 = -q1
@@ -102,7 +100,7 @@ function init_state!(parent::Union{Nothing, BackEdge},
   node = Node(edges, parent)
   if !isnothing(parent)
     parent.node.edges[parent.ix].dest = node
-    backprop!(node, length(edges), Float32[-mean(e.dist) for e in edges])
+    backprop!(node, -maximum(mean(e.dist) for e in edges))
   end
   node
 end
@@ -112,18 +110,20 @@ function explore_next_state!(node::Node, st::State,
   while true
     samples = Float32[rand(e.dist) for e in node.edges]
     ix = argmax(samples)
-    # log_action(st, ValuedAction(node.edges[ix]))
     # if VALIDATE
     #   validate_action(st, node.edges[ix].action)
     # end
     next_st = @set apply_action(st, node.edges[ix].action).player = next_player(st.player)
     if is_terminal(next_st)
-      backprop!(node, 1, (-1f0,))
+      backprop!(node, -1f0)
+      log_action(st, ValuedAction(node.edges[ix]); bound=upper(node.edges[ix]))
       return nothing
     elseif isnothing(node.edges[ix].dest)
       init_state!(BackEdge(ix, node), next_st, gpucom)
+      log_action(st, ValuedAction(node.edges[ix]); bound=upper(node.edges[ix]))
       return nothing
     else
+      log_action(st, ValuedAction(node.edges[ix]); bound=upper(node.edges[ix]))
       node = node.edges[ix].dest
       st = next_st
     end
@@ -139,7 +139,7 @@ function (nr::NoRollP)(st::State)
     for task_chan in nr.task_chans
       t = @async for _ in chan
         explore_next_state!(nr.root, $st, gpu_com(nr.req, $(task_chan)))
-        # println("")
+        println("")
       end
       bind(chan, t)
     end
@@ -148,13 +148,13 @@ function (nr::NoRollP)(st::State)
     end
     close(chan)
   end
-  # println("Options:")
-  # indent!()
-  # for e in nr.root.edges
-  #   printindent("")
-  #   log_action(st, q_action(e))
-  # end
-  # dedent!()
+  println("Options:")
+  indent!()
+  for e in nr.root.edges
+    printindent("")
+    log_action(st, ValuedAction(e), bound=upper(e))
+  end
+  dedent!()
   vals = Float32[mean(e.dist) for e in nr.root.edges]
   ix = argmax(vals)
   chosen = ValuedAction(nr.root.edges[ix].action, vals[ix])
