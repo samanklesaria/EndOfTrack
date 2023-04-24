@@ -103,7 +103,7 @@ cat4(stack) = reduce((x,y)->cat(x,y; dims=4), stack)
 cat3(x,y) = cat(x,y; dims=3)
 pad(x) = pad_zeros(x, 1; dims=(1,2))
 
-function make_net()
+function make_net(;where="checkpoint.bson")
   cpu_net = Chain([
     Conv((3,3), 6=>16, swish),
     BatchNorm(16),
@@ -114,8 +114,8 @@ function make_net()
     BatchNorm(128),
     Dense(128, 1)
   ])
-  if isfile("checkpoint.bson")
-    @load "checkpoint.bson" cpu_net
+  if isfile(where)
+    @load where cpu_net
     println("Loaded weights")
   end
   cpu_net

@@ -1,16 +1,7 @@
-# Value functions are from the perspective of the current player
-
-# TODO: better error handling.
-# Opponent-moved expects a correct move.
-
-# Perhaps we should be okay with errors happening.
-# Instead of erring, we should just terminate the current run and start a new one. 
-# Log it to stderr.
-
-
 mutable struct EdgeP{N}
   action::Action
-  dist::Union{ValPrior, Dirac{Float32}}
+  q::Float32
+  n::Int
   dest::Union{N, Nothing}
 end
 
@@ -20,6 +11,7 @@ struct BackEdgeP{N}
 end
 
 mutable struct Node
+  counts::Int
   edges::Vector{EdgeP{Node}}
   parent::Union{Nothing, BackEdgeP{Node}}
 end
@@ -31,8 +23,14 @@ const BackEdge = BackEdgeP{Node}
 const ReqData = Tuple{Array{Float32, 4}, Channel{Vector{Float32}}}
 const ReqChan = Channel{ReqData}
 
-ValuedAction(e::Edge) = ValuedAction(e.action, mean(e.dist))
-upper(e::Edge) = upperbound(e.dist)
+function ucb(n::Int, e::Edge)
+  bonus = 8 * (log(n) / e.n)
+  (e.q / e.n) + sqrt(bonus)
+end
+
+ucb_action(n::Node, e::EdgeP) = ValuedAction(e.action, ucb(n.counts, e))
+q_action(e::EdgeP) = ValuedAction(e.action, e.q / e.n)
+count_action(e::EdgeP) = ValuedAction(e.action, e.n)
 
 mutable struct NoRollP{R,T}
   root::Node
@@ -40,14 +38,15 @@ mutable struct NoRollP{R,T}
   task_chans::Vector{T}
   shared::Bool
   req::R
+  temp::Float32
 end
 
 function NoRollP{R, T}(req::R; steps=1_600, shared=false,
-    tasks=16, st=start_state) where {R,T}
+    tasks=16, st=start_state, temp=1f0) where {R,T}
   val_chans = [T() for _ in 1:tasks]
   gpucom = gpu_com(req, val_chans[1])
   root = init_state!(nothing, st, gpucom)
-  NoRollP{R,T}(root, steps, val_chans, shared, req) 
+  NoRollP{R,T}(root, steps, val_chans, shared, req, temp) 
 end
 
 const NoRoll = NoRollP{ReqChan, Channel{Vector{Float32}}}
@@ -67,16 +66,17 @@ function opponent_moved!(nr::NoRollP, action::Action)
   end
 end
 
-function backprop!(node::Node, q1)
-  q2 = q1^2
+function backprop!(node::Node, q::Float32)
   back = node.parent
   while !isnothing(back)
     parent_node = back.node
     edge = parent_node.edges[back.ix]
-    edge.dist = posterior(edge.dist, 1, q1, q2)
+    edge.n += 1
+    parent_node.counts += 1
+    edge.q += q
     node = parent_node
     back = node.parent
-    q1 = -q1
+    q = -q
   end
 end
 
@@ -93,14 +93,14 @@ function init_state!(parent::Union{Nothing, BackEdge},
   winning_ix = findfirst(is_terminal.(next_sts))
   if isnothing(winning_ix)
     vs = approx_vals(next_sts, gpucom)
-    edges = Edge[Edge(a, ValPrior(v), nothing) for (a,v) in zip(acts, vs)]
+    edges = Edge[Edge(a, v, 1, nothing) for (a,v) in zip(acts, vs)]
   else
-    edges = Edge[Edge(acts[winning_ix], Dirac(1f0), nothing)]
+    edges = [Edge(acts[winning_ix], 1f0, 1, nothing)]
   end
-  node = Node(edges, parent)
+  node = Node(1, edges, parent)
   if !isnothing(parent)
     parent.node.edges[parent.ix].dest = node
-    backprop!(node, -maximum(mean(e.dist) for e in edges))
+    backprop!(node, -mean(e.q for e in edges))
   end
   node
 end
@@ -108,22 +108,24 @@ end
 function explore_next_state!(node::Node, st::State,
     gpucom::Union{GPUCom, Nothing})
   while true
-    samples = Float32[rand(e.dist) for e in node.edges]
-    ix = argmax(samples)
+    ucbs = Float32[ucb(node.counts, e) for e in node.edges]
+    ix = argmax(ucbs)
     # if VALIDATE
     #   validate_action(st, node.edges[ix].action)
     # end
     next_st = @set apply_action(st, node.edges[ix].action).player = next_player(st.player)
     if is_terminal(next_st)
+      node.edges[ix].n += 1
+      node.edges[ix].q += 1
       backprop!(node, -1f0)
-      log_action(st, ValuedAction(node.edges[ix]); bound=upper(node.edges[ix]))
+      # log_action(st, ucb_action(node, node.edges[ix]))
       return nothing
     elseif isnothing(node.edges[ix].dest)
       init_state!(BackEdge(ix, node), next_st, gpucom)
-      log_action(st, ValuedAction(node.edges[ix]); bound=upper(node.edges[ix]))
+      # log_action(st, ucb_action(node, node.edges[ix]))
       return nothing
     else
-      log_action(st, ValuedAction(node.edges[ix]); bound=upper(node.edges[ix]))
+      # log_action(st, ucb_action(node, node.edges[ix]))
       node = node.edges[ix].dest
       st = next_st
     end
@@ -139,7 +141,7 @@ function (nr::NoRollP)(st::State)
     for task_chan in nr.task_chans
       t = @async for _ in chan
         explore_next_state!(nr.root, $st, gpu_com(nr.req, $(task_chan)))
-        println("")
+        # println("")
       end
       bind(chan, t)
     end
@@ -148,20 +150,20 @@ function (nr::NoRollP)(st::State)
     end
     close(chan)
   end
-  println("Options:")
-  indent!()
-  for e in nr.root.edges
-    printindent("")
-    log_action(st, ValuedAction(e), bound=upper(e))
-  end
-  dedent!()
-  vals = Float32[mean(e.dist) for e in nr.root.edges]
-  ix = argmax(vals)
+  # println("Options:")
+  # indent!()
+  # for e in nr.root.edges
+  #   printindent("")
+  #   log_action(st, count_action(e))
+  # end
+  # dedent!()
+  vals = Float32[e.n / nr.temp for e in nr.root.edges]
+  ix = sample(Weights(softmax(vals)))
   chosen = ValuedAction(nr.root.edges[ix].action, vals[ix])
   root = nr.root.edges[ix].dest
   if !isnothing(root)
     root.parent = nothing
     nr.root = root
   end
-  chosen
+  chosen 
 end
