@@ -76,13 +76,12 @@ function do_validate(req, seed)
   end
 end
 
-# On random weights, we get 0.643
 # When pretraining, we get 0.143
 function bench_noroll()
   N = 20
   N_EVAL = 4
   gpus = Iterators.Stateful(sorted_gpus())
-  np = NewParams(make_net(where="evalnet2.bson"))
+  np = NewParams(make_net())
   req = ReqChan(EVAL_BATCH_SIZE)
   for i in 1:N_EVAL
     t = @tspawnat (1 + i) begin

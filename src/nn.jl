@@ -121,6 +121,36 @@ function make_net(;where="checkpoint.bson")
   cpu_net
 end
 
+
+struct ResNet
+  l1::Conv
+  l2::Conv
+  l3::Conv
+end
+Flux.@functor ResNet
+
+function (m::ResNet)(x)
+  y = pad(m.l1(x))
+  z = pad(m.l2(cat3(y, x)))
+  m.l3(cat3(y + z, x))
+end
+
+function make_resnet(where="checkpoint3.bson")
+  resnet = ResNet(
+    Conv((3,3), 6=>32, swish),
+    Conv((3,3), (32+6)=>32, swish),
+    Conv((3,3), (32+6)=>32, swish))
+  cpu_net = Chain([
+    resnet, 
+    Flux.flatten,
+    Dense(960, 1)])
+  if isfile(where)
+    @load where cpu_net
+    println("Loaded weights")
+  end
+  gpu(cpu_net)
+end
+
 function approx_vals(st::Vector{State}, gpucom::GPUCom)
   trans, nst = unzip(normalize_player.(st))
   batch = cat4(as_pic.(nst))
@@ -206,7 +236,7 @@ function player(buffer_chan::Channel{ReplayBuffer}, req::ReqChan)
 end
 
 function train_loop()
-  net = make_net()
+  net = make_resnet()
   buffer_chan = Channel{ReplayBuffer}(1)
   req = ReqChan(EVAL_BATCH_SIZE)
   put!(buffer_chan, ReplayBuffer(REPLAY_SIZE))

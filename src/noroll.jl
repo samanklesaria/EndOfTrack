@@ -35,18 +35,18 @@ count_action(e::EdgeP) = ValuedAction(e.action, e.n)
 mutable struct NoRollP{R,T}
   root::Node
   steps::Int
-  task_chans::Vector{T}
+  task_chan::T
   shared::Bool
   req::R
   temp::Float32
 end
 
 function NoRollP{R, T}(req::R; steps=1_600, shared=false,
-    tasks=16, st=start_state, temp=1f0) where {R,T}
-  val_chans = [T() for _ in 1:tasks]
-  gpucom = gpu_com(req, val_chans[1])
+    st=start_state, temp=1f0) where {R,T}
+  val_chan = T()
+  gpucom = gpu_com(req, val_chan)
   root = init_state!(nothing, st, gpucom)
-  NoRollP{R,T}(root, steps, val_chans, shared, req, temp) 
+  NoRollP{R,T}(root, steps, val_chan, shared, req, temp) 
 end
 
 const NoRoll = NoRollP{ReqChan, Channel{Vector{Float32}}}
@@ -136,19 +136,9 @@ gpu_com(req::ReqChan, task_chan) = GPUCom(req, task_chan)
 gpu_com(::Nothing, _) = nothing
 
 function (nr::NoRollP)(st::State)
-  chan = Channel{Nothing}(0)
-  @sync begin
-    for task_chan in nr.task_chans
-      t = @async for _ in chan
-        explore_next_state!(nr.root, $st, gpu_com(nr.req, $(task_chan)))
-        # println("")
-      end
-      bind(chan, t)
-    end
-    for _ in 1:nr.steps
-      put!(chan, nothing)
-    end
-    close(chan)
+  gpucom = gpu_com(nr.req, nr.task_chan)
+  for _ in 1:nr.steps
+    explore_next_state!(nr.root, st, gpucom)
   end
   # println("Options:")
   # indent!()
@@ -157,6 +147,8 @@ function (nr::NoRollP)(st::State)
   #   log_action(st, count_action(e))
   # end
   # dedent!()
+  # vals = Float32[e.q / e.n for e in nr.root.edges]
+  # ix = argmax(vals)
   vals = Float32[e.n / nr.temp for e in nr.root.edges]
   ix = sample(Weights(softmax(vals)))
   chosen = ValuedAction(nr.root.edges[ix].action, vals[ix])
