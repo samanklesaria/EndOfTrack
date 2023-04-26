@@ -5,12 +5,12 @@
 next_player(::Nothing) = nothing
 
 function winner_test(st, steps, winner)
-  for (st, winner) in [(st, winner)]
-    # (st, winner), (flip_players(st), next_player(winner)),
-    # (flip_board(st), winner)]
+  for (st, winner) in [
+    (st, winner), (flip_players(st), next_player(winner)),
+    (flip_board(st), winner)]
     test_players = [
-      # AlphaBeta(4), 
-      TestNoRoll(nothing; st=st, shared=true)
+      AlphaBeta(4), 
+      # TestNoRoll(nothing; st=st, shared=true)
     ]
     for p in test_players
       println("\n$(typeof(p))")
@@ -79,5 +79,6 @@ function test()
         SMatrix{2,5}([3 4; 4 4; 5 4; 6 4; 6 6]'))
   ]))
   println("\n2 step block test")
-  winner_test(st4, 0, nothing)
+  winner_test(st4, 4, nothing)
+        
 end

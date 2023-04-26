@@ -135,7 +135,7 @@ function (m::ResNet)(x)
   m.l3(cat3(y + z, x))
 end
 
-function make_resnet(where="checkpoint3.bson")
+function make_resnet(;where="checkpoint3.bson")
   resnet = ResNet(
     Conv((3,3), 6=>32, swish),
     Conv((3,3), (32+6)=>32, swish),

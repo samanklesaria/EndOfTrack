@@ -13,7 +13,7 @@ function min_action(st, alpha::ValuedAction, beta::ValuedAction, depth, ab)
   if depth == 0
     return ValuedAction(fake_action, 0f0)
   end
-  for a in shuffled_actions(ab.rng, st) 
+  for a in shuffled_actions(st) 
     next_st = @set apply_action(st, a).player = 1
     if is_terminal(next_st)
       return ValuedAction(a.action, -1)
@@ -48,7 +48,7 @@ function max_action(st, alpha, beta, depth, ab)
   if depth == 0
     return ValuedAction(fake_action, 0f0)
   end
-  for a in shuffled_actions(ab.rng, st)
+  for a in shuffled_actions(st)
     next_st = @set apply_action(st, a).player = 2
     if is_terminal(next_st)
       return ValuedAction(a.action, 1)
@@ -82,11 +82,7 @@ end
 
 struct AlphaBeta
   depth::Int
-  rng::Xoshiro
 end
-
-AlphaBeta(depth) = AlphaBeta(depth, 
-  Xoshiro(rand(TaskLocalRNG(), UInt8)))
 
 function (ab::AlphaBeta)(st)
   if st.player == 1
@@ -98,45 +94,6 @@ end
 
 larger_q(a, b) = a.value > b.value ? a : b
 
-function cached_max_action(st::State, depth::Int, cache::Dict, mm)
-  trans, nst = normalized(st)
-  if haskey(cache, nst)
-    trans(cache[nst])
-  elseif depth == 0
-    ValuedAction(fake_action, 0f0)
-  else
-    best_child = mapreduce(larger_q, smart_actions(mm.rng, nst)) do a
-      next_st = @set apply_action(nst, a).player = 2
-      if is_terminal(next_st)
-        ValuedAction(a.action, 1)
-      else
-        # printindent("Considering ")
-        # log_action(nst, a)
-        # indent!()
-        child_val = cached_max_action(next_st, depth - 1, cache, mm).value
-        # dedent!()
-        ValuedAction(a.action, discount * child_val)
-      end
-    end
-    # printindent("Best child ")
-    # log_action(nst, best_child)
-    cache[nst] = best_child
-    trans(best_child)
-  end
-end
-
-struct CachedMinimax
-  depth::Int
-  rng::Xoshiro
-end
-
-CachedMinimax(depth) = CachedMinimax(depth, Xoshiro(rand(TaskLocalRNG(), UInt8)))
-
-function (mm::CachedMinimax)(st::State)
-  cache = Dict{State, ValuedAction}()
-  cached_max_action(st, mm.depth, cache, mm)
-end
-
 function apply_hueristic(st::State, a::Action)::ValuedAction
   new_st = apply_action(st, a)
   term = is_terminal(new_st)
@@ -147,41 +104,10 @@ function apply_hueristic(st::State, a::Action)::ValuedAction
   end
 end
 
-function shuffled_actions(rng, st)
+function shuffled_actions(st)
   acts = actions(st)
-  Random.shuffle!(rng, acts)
+  Random.shuffle!(acts)
   vacts = ValuedAction[apply_hueristic(st, a) for a in acts]
   sort(vacts; by=a-> abs.(a.value), rev= true, alg=MergeSort) 
 end
 
-function smart_actions(rng, st)
-  acts = shuffled_actions(rng, st)
-  if abs(acts[1].value) == 1f0
-    acts[1:1]
-  else
-    acts 
-  end
-end
-
-struct Rand
-  rng::Xoshiro
-end
-
-function (r::Rand)(st::State)
-  choices = actions(st)
-  ValuedAction(choices[rand(r.rng, 1:length(choices))], 0f0)
-end
-
-struct Greedy
-  rng::Xoshiro
-end
-
-function (b::Greedy)(st::State)
-  acts = actions(st)
-  choices = ValuedAction[apply_hueristic(st, a) for a in acts]
-  player = st.player == 1 ? 1 : -1
-  probs = [player * c.value for c in choices]
-  ix = argmax(probs)
-  mask = (probs .== probs[ix])
-  rand(b.rng, choices[mask])
-end
