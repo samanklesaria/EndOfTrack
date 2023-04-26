@@ -22,6 +22,10 @@ include("static.jl")
 # include("dists.jl")
 # include("thompson.jl")
 
+# For State Normalization
+# include("normalization.jl")
+# include("dag.jl")
+
 mutable struct TimeTracker
   @atomic steps::Int
   @atomic time::Float64
