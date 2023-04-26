@@ -1,7 +1,3 @@
-# TODO: NoRoll is slower than AlphaBeta.
-# Profile to find out why. Is it all the dynamic dispatches?
-# Is it repeated Gamma sampling?
-
 next_player(::Nothing) = nothing
 
 function winner_test(st, steps, winner)
@@ -9,8 +5,8 @@ function winner_test(st, steps, winner)
     (st, winner), (flip_players(st), next_player(winner)),
     (flip_board(st), winner)]
     test_players = [
-      AlphaBeta(4), 
-      # TestNoRoll(nothing; st=st, shared=true)
+      AlphaBeta(4, nothing), 
+      TestNoRoll(nothing; st=st, shared=true)
     ]
     for p in test_players
       println("\n$(typeof(p))")

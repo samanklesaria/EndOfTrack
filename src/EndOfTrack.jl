@@ -68,17 +68,17 @@ function bench_AB()
   times, win_avgs 
 end
 
-# After pretraining with checkpoint2, we get -0.38
+# This gives -0.275 reward. 
 function bench_noroll()
   N = 40
   N_EVAL = 4
   gpus = Iterators.Stateful(sorted_gpus())
-  np = NewParams(make_resnet(;where="checkpoint3.bson"))
+  np = [NewParams(make_resnet(;where="checkpoint2.bson")) for _ in 1:N_EVAL]
   req = ReqChan(EVAL_BATCH_SIZE)
   for i in 1:N_EVAL
     t = @tspawnat (1 + i) begin
       device!($(popfirst!(gpus)))
-      evaluator(req, np)
+      evaluator(req, $(np[i]))
     end
     bind(req, t)
     errormonitor(t)
@@ -92,7 +92,6 @@ function test_validate(seed)
   game_q(simulate(start_state, players))
 end
 
-# This gives -0.4
 function bench_testnoroll()
   N = 50
   mean(tmap(seed->test_validate(UInt8(seed)), 1:N))

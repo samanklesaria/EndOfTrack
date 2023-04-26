@@ -24,7 +24,7 @@ const ReqData = Tuple{Array{Float32, 4}, Channel{Vector{Float32}}}
 const ReqChan = Channel{ReqData}
 
 function ucb(n::Int, e::Edge)
-  bonus = 8 * (log(n) / e.n)
+  bonus = 2 * (log(n) / e.n)
   (e.q / e.n) + sqrt(bonus)
 end
 
@@ -93,7 +93,7 @@ function init_state!(parent::Union{Nothing, BackEdge},
   winning_ix = findfirst(is_terminal.(next_sts))
   if isnothing(winning_ix)
     vs = approx_vals(next_sts, gpucom)
-    edges = Edge[Edge(a, v, 1, nothing) for (a,v) in zip(acts, vs)]
+    edges = Edge[Edge(a, -v, 1, nothing) for (a,v) in zip(acts, vs)]
   else
     edges = [Edge(acts[winning_ix], 1f0, 1, nothing)]
   end

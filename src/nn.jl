@@ -152,10 +152,10 @@ function make_resnet(;where="checkpoint3.bson")
 end
 
 function approx_vals(st::Vector{State}, gpucom::GPUCom)
-  trans, nst = unzip(normalize_player.(st))
+  _, nst = unzip(normalize_player.(st))
   batch = cat4(as_pic.(nst))
   put!(gpucom.req_chan, (batch, gpucom.val_chan))
-  trans .* take!(gpucom.val_chan)
+  take!(gpucom.val_chan)
 end
 
 approx_vals(st::Vector{State}, ::Nothing) = zeros(Float32, length(st))
@@ -170,7 +170,7 @@ function evaluator(req::ReqChan, newparams::NewParams)
       Flux.testmode!(net)
     end
     fetch(req)
-    pics, outs = unzip([take!(req) for _ in 1:req.n_avail_items if isready(req)])
+    pics, outs = unzip(ReqData[take!(req) for _ in 1:req.n_avail_items if isready(req)])
     if length(pics) == 0
       continue
     end
