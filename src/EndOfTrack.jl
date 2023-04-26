@@ -12,21 +12,15 @@ include("rules.jl")
 include("util.jl")
 include("searches.jl")
 include("groupops.jl")
-include("dists.jl")
 include("noroll.jl")
 include("nn.jl")
 include("tests.jl")
 include("static.jl")
 # include("gui.jl")
 
-# function playoff(players)
-#   N = 20
-#   results = tmap(_->simulate(start_state, players()), 1:N)
-#   println("$(sum(isnothing(r.winner) for r in results) / N) were nothing")
-#   win_avg = mean([r.winner for r in results if !isnothing(r.winner)])
-#   println("Average winner was $win_avg") 
-#   # histogram([r.steps for r in results if !isnothing(r.winner)])
-# end
+# For Thompson Sampling:
+# include("dists.jl")
+# include("thompson.jl")
 
 mutable struct TimeTracker
   @atomic steps::Int
@@ -59,8 +53,8 @@ function bench_AB()
   win_avgs = [
     begin
       results = tmap(seed->simulate(start_state,
-        (BenchPlayer(AlphaBeta(i, Xoshiro(seed)), ts[i]),
-         BenchPlayer(AlphaBeta(i+1, Xoshiro(seed)), ts[i+1]))), 1:N)
+        (BenchPlayer(AlphaBeta(i), ts[i]),
+         BenchPlayer(AlphaBeta(i+1), ts[i+1]))), 1:N)
       mean([r.winner for r in results if !isnothing(r.winner)])
     end for i in 1:(length(ts) - 1)
   ]
@@ -68,7 +62,6 @@ function bench_AB()
   times, win_avgs 
 end
 
-# This gives -0.275 reward. 
 function bench_noroll()
   N = 40
   N_EVAL = 4
@@ -83,20 +76,18 @@ function bench_noroll()
     bind(req, t)
     errormonitor(t)
   end
-  results = tmap(seed->validate_noroll(req, UInt8(seed)), 1:N)
+  results = tmap(seed->validate_noroll(req), 1:N)
   mean(results)
 end
 
-function test_validate(seed)
-  players = (TestNoRoll(nothing; shared=false), AlphaBeta(5, Xoshiro(seed)))
+function test_validate()
+  players = (TestNoRoll(nothing; shared=false), AlphaBeta(5))
   game_q(simulate(start_state, players))
 end
 
 function bench_testnoroll()
   N = 50
-  mean(tmap(seed->test_validate(UInt8(seed)), 1:N))
+  mean(tmap(_->test_validate(), 1:N))
 end
-
-
 
 end # module

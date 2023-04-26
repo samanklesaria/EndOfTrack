@@ -5,7 +5,7 @@ function winner_test(st, steps, winner)
     (st, winner), (flip_players(st), next_player(winner)),
     (flip_board(st), winner)]
     test_players = [
-      AlphaBeta(4, nothing), 
+      AlphaBeta(4), 
       TestNoRoll(nothing; st=st, shared=true)
     ]
     for p in test_players

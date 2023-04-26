@@ -80,69 +80,8 @@ function max_action(st, alpha, beta, depth, ab)
   alpha
 end
 
-# function min_action_nn(st, alpha, beta, depth, ab)
-#   acts = shuffled_actions(st)
-#   next_sts = next_state.(Ref(st), acts)
-#   winning_ix = findfirst(is_terminal.(next_sts))
-#   if !isnothing(winning_ix)
-#     return ValuedAction(acts[winning_ix], -1)
-#   else 
-#     if depth == 0
-#       val = minimum(approx_vals(next_sts, ab.chan))
-#       return ValuedAction(fake_action, val)
-#     else
-#       for (a, next_st) in zip(acts, next_sts)
-#         recurse = min_action_nn(next_st, inv_discount * alpha, inv_discount * beta, depth - 1, ab)
-#         ub = discount * recurse
-#         the_action = ValuedAction(a.action, ub.value)
-#         if ub.value > alpha.value
-#           alpha = the_action
-#           if alpha.value > beta.value
-#             return beta
-#           end
-#           if alpha.value == beta.value
-#             return alpha
-#           end
-#         end
-#       end
-#     end
-#   end
-#   alpha
-# end
-
-# function max_action_nn(st, alpha, beta, depth, ab)
-#   acts = shuffled_actions(st)
-#   next_sts = next_state.(Ref(st), acts)
-#   winning_ix = findfirst(is_terminal.(next_sts))
-#   if !isnothing(winning_ix)
-#     return ValuedAction(acts[winning_ix], 1)
-#   else 
-#     if depth == 0
-#       val = minimum(approx_vals(next_sts, ab.chan))
-#       return ValuedAction(fake_action, val)
-#     else
-#       for (a, next_st) in zip(acts, next_sts)
-#         recurse = min_action_nn(next_st, inv_discount * alpha, inv_discount * beta, depth - 1, ab)
-#         ub = discount * recurse
-#         the_action = ValuedAction(a.action, ub.value)
-#         if ub.value > alpha.value
-#           alpha = the_action
-#           if alpha.value > beta.value
-#             return beta
-#           end
-#           if alpha.value == beta.value
-#             return alpha
-#           end
-#         end
-#       end
-#     end
-#   end
-#   alpha
-end
-
-struct AlphaBeta{T}
+struct AlphaBeta
   depth::Int
-  chan::T
 end
 
 function (ab::AlphaBeta)(st)

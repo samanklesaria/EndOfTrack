@@ -72,7 +72,7 @@ function trainer(net, req, buffer_chan::Channel{ReplayBuffer}, np::Vector{NewPar
           @save "checkpoint.bson" cpu_net
           println("Saved")
           try
-            valq = validate_noroll(req, seed)
+            valq = validate_noroll(req)
             @info "validate" valq
           catch exc
             open("val_errors.log", "a") do io
@@ -121,7 +121,6 @@ function make_net(;where="checkpoint.bson")
   cpu_net
 end
 
-
 struct ResNet
   l1::Conv
   l2::Conv
@@ -135,7 +134,7 @@ function (m::ResNet)(x)
   m.l3(cat3(y + z, x))
 end
 
-function make_resnet(;where="checkpoint3.bson")
+function make_resnet(;where="checkpoint2.bson")
   resnet = ResNet(
     Conv((3,3), 6=>32, swish),
     Conv((3,3), (32+6)=>32, swish),
@@ -206,8 +205,8 @@ function game_q(result)
   end
 end
 
-function validate_noroll(req::ReqChan, seed::UInt8)
-    players = (NoRoll(req; shared=false), AlphaBeta(5, Xoshiro(seed)))
+function validate_noroll(req::ReqChan)
+    players = (NoRoll(req; shared=false), AlphaBeta(5))
     game_q(simulate(start_state, players))
 end
 
