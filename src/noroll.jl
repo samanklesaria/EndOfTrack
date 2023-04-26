@@ -147,10 +147,10 @@ function (nr::NoRollP)(st::State)
   #   log_action(st, count_action(e))
   # end
   # dedent!()
-  vals = Float32[e.q / e.n for e in nr.root.edges]
-  ix = argmax(vals)
-  # vals = Float32[e.n / nr.temp for e in nr.root.edges]
-  # ix = sample(Weights(softmax(vals)))
+  # vals = Float32[e.q / e.n for e in nr.root.edges]
+  # ix = argmax(vals)
+  vals = Float32[e.n / nr.temp for e in nr.root.edges]
+  ix = sample(Weights(softmax(vals)))
   chosen = ValuedAction(nr.root.edges[ix].action, vals[ix])
   root = nr.root.edges[ix].dest
   if !isnothing(root)

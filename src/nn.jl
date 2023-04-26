@@ -71,16 +71,8 @@ function trainer(net, req, buffer_chan::Channel{ReplayBuffer}, np::Vector{NewPar
           cpu_net = cpu(net)
           @save "checkpoint.bson" cpu_net
           println("Saved")
-          try
-            valq = validate_noroll(req)
-            @info "validate" valq
-          catch exc
-            open("val_errors.log", "a") do io
-              with_logger(SimpleLogger(io)) do                
-                @error exception=exc
-              end
-            end
-          end
+          valq = mean(tmap(_->validate_noroll(req), 1:10))
+          @info "validate" valq
         end
         if ix % 2000 == 1999
           take!(buffer_chan)
@@ -210,27 +202,18 @@ function validate_noroll(req::ReqChan)
     game_q(simulate(start_state, players))
 end
 
-
 function player(buffer_chan::Channel{ReplayBuffer}, req::ReqChan)
-  open("errors.log", "w") do io
-    with_logger(SimpleLogger(io)) do
-      while true
-        try
-          noroll = NoRoll(req; shared=true)
-          players = (noroll, noroll)
-          println("Starting game on thread $(Threads.threadid())")
-          result = simulate(start_state, players; track=true)
-          gameres = GameResult(game_q(result), result.states)
-          println("Finished game on $(Threads.threadid())")
-          nsts, values = with_values(gameres)
-          buffer = take!(buffer_chan)
-          append!(buffer, collect(zip(nsts, values)))
-          put!(buffer_chan, buffer)
-        catch exc
-          @error exception=exc
-        end
-      end
-    end
+  while true
+      noroll = NoRoll(req; shared=true)
+      players = (noroll, noroll)
+      println("Starting game on thread $(Threads.threadid())")
+      result = simulate(start_state, players; track=true)
+      gameres = GameResult(game_q(result), result.states)
+      println("Finished game on $(Threads.threadid())")
+      nsts, values = with_values(gameres)
+      buffer = take!(buffer_chan)
+      append!(buffer, collect(zip(nsts, values)))
+      put!(buffer_chan, buffer)
   end
 end
 
@@ -263,6 +246,3 @@ function train_loop()
   errormonitor(tt)
   bind(req, tt)
 end
-
-# TODO: indicate to workers somehow that a new thing is available.
-# Or maybe not?
