@@ -17,6 +17,7 @@ include("nn.jl")
 include("tests.jl")
 include("static.jl")
 # include("gui.jl")
+# include("cudasim.jl")
 
 # For Thompson Sampling:
 # include("dists.jl")
@@ -87,6 +88,18 @@ end
 function test_validate()
   players = (TestNoRoll(nothing; shared=false), AlphaBeta(5))
   game_q(simulate(start_state, players))
+end
+
+function initial_q_vals(;st=start_state)
+  gpus = Iterators.Stateful(sorted_gpus())
+  net = make_resnet(;where="checkpoint2.bson")
+  acts = actions(st)
+  next_sts = next_state.(Ref(st), acts)
+  _, nst = unzip(normalize_player.(next_sts))
+  batch = gpu(cat4(as_pic.(nst)))
+  values = logit_to_val.(net(batch))
+  result = (acts, cpu(values))
+  @save "qvals.bson" result
 end
 
 function bench_testnoroll()
